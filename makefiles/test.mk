@@ -181,10 +181,23 @@ ifeq (${CI},true)
 # In CI, we expect all artifacts to already be built and loaded for the script
 upgrade-test:
 	./tests/upgrade-test.sh
+else ifeq (${FLUVIO_MODE},local)
+upgrade-test: build-cli
+	./tests/upgrade-test.sh
 else
 # When not in CI (i.e. development), load the dev k8 image before running test
 upgrade-test: build-cli build_k8_image
 	./tests/upgrade-test.sh
+endif
+
+ifeq (${CI},true)
+# In CI, we expect all artifacts to already be built and loaded for the script
+resume-test:
+	./tests/local-resume-test.sh
+else
+# When not in CI (i.e. development), load the dev k8 image before running test
+resume-test: build-cli
+	./tests/local-resume-test.sh
 endif
 
 # When running in development, might need to run `cargo clean` to ensure correct fluvio binary is used
@@ -208,7 +221,7 @@ cli-partition-test-multiple-partitions:
 	bats ./tests/cli/partition_test/multiple_partitions.bats
 
 cli-fluvio-smoke:
-	bats $(shell ls -1 ./tests/cli/fluvio_smoke_tests/*.bats | sort -R)
+	bats -x $(shell ls -1 ./tests/cli/fluvio_smoke_tests/*.bats | sort -R)
 	bats ./tests/cli/fluvio_smoke_tests/non-concurrent/local-resume.bats
 	bats ./tests/cli/fluvio_smoke_tests/non-concurrent/cluster-delete.bats
 
