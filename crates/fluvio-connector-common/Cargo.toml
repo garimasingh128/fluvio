@@ -1,11 +1,11 @@
 [package]
 name = "fluvio-connector-common"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-repository = "https://github.com/infinyon/fluvio"
 description = "Fluvio Connector Common SDK"
+version = "0.0.0"
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [features]
 default = []
@@ -18,6 +18,8 @@ required-features = ["derive"]
 
 [dependencies]
 async-trait = { workspace = true }
+async-channel = { workspace = true }
+ctrlc = { workspace = true, features = ["termination"]}
 anyhow = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true , features = ["sink"]}
@@ -25,11 +27,12 @@ serde = { workspace = true,  features = ["derive", "rc"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 tracing = { workspace = true }
+tokio = { workspace = true }
 
 fluvio = { workspace = true, features = ["smartengine"] }
 fluvio-future = { workspace = true, features = ["subscriber"] }
 fluvio-connector-package = { workspace = true  }
-fluvio-connector-derive = { path = "../fluvio-connector-derive/", optional = true }
+fluvio-connector-derive = { workspace = true, optional = true }
 fluvio-sc-schema = { workspace = true }
 fluvio-smartengine = { workspace = true , features = [ "transformation", "engine"] }
 

@@ -3,21 +3,35 @@
 mod config;
 mod stream;
 mod offset;
+mod retry;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use adaptive_backoff::prelude::{
+    Backoff, BackoffBuilder, ExponentialBackoff, ExponentialBackoffBuilder,
+};
 use anyhow::Result;
 use async_channel::Sender;
-use fluvio_spu_schema::server::consumer_offset::UpdateConsumerOffsetRequest;
+use async_lock::Mutex;
+use fluvio_future::timer::sleep;
+use fluvio_socket::VersionedSerialSocket;
+use fluvio_spu_schema::server::consumer_offset::{
+    FetchConsumerOffsetsRequest, UpdateConsumerOffsetRequest,
+};
 use tracing::{debug, error, trace, instrument, info, warn};
 use futures_util::stream::{Stream, select_all};
 use once_cell::sync::Lazy;
-use futures_util::future::{Either, err, join_all};
+use futures_util::future::{Either, err, try_join_all};
 use futures_util::stream::{StreamExt, once, iter};
 use futures_util::FutureExt;
 
 use fluvio_types::PartitionId;
-use fluvio_types::defaults::{FLUVIO_CLIENT_MAX_FETCH_BYTES, FLUVIO_MAX_SIZE_TOPIC_NAME};
+use fluvio_types::defaults::{
+    CONSUMER_REPLICA_KEY, FLUVIO_CLIENT_MAX_FETCH_BYTES, FLUVIO_MAX_SIZE_TOPIC_NAME,
+    RECONNECT_BACKOFF_FACTOR, RECONNECT_BACKOFF_MAX_DURATION, RECONNECT_BACKOFF_MIN_DURATION,
+};
 use fluvio_spu_schema::server::stream_fetch::{
     DefaultStreamFetchRequest, DefaultStreamFetchResponse, CHAIN_SMARTMODULE_API,
     OFFSET_MANAGEMENT_API,
@@ -32,9 +46,14 @@ use crate::offset::{Offset, fetch_offsets};
 use crate::spu::{SpuDirectory, SpuSocketPool};
 
 pub use config::{ConsumerConfig, ConsumerConfigBuilder};
-pub use config::{ConsumerConfigExt, ConsumerConfigExtBuilder, OffsetManagementStrategy};
-pub use stream::{ConsumerStream, MultiplePartitionConsumerStream, SinglePartitionConsumerStream};
+pub use config::{ConsumerConfigExt, ConsumerConfigExtBuilder, OffsetManagementStrategy, RetryMode};
+pub use stream::{
+    ConsumerStream, MultiplePartitionConsumerStream, SinglePartitionConsumerStream,
+    ConsumerBoxFuture,
+};
 pub use offset::ConsumerOffset;
+pub use retry::ConsumerRetryStream;
+pub use fluvio_protocol::record::ConsumerRecord;
 
 pub use fluvio_protocol::record::ConsumerRecord as Record;
 pub use fluvio_spu_schema::server::smartmodule::SmartModuleInvocation;
@@ -44,6 +63,28 @@ pub use fluvio_spu_schema::server::smartmodule::SmartModuleContextData;
 pub use fluvio_smartmodule::dataplane::smartmodule::SmartModuleExtraParams;
 
 const STREAM_TO_SERVER_CHANNEL_SIZE: usize = 100;
+const MAX_ATTEMPTS_CONSUMER_OFFSET: usize = 30;
+
+/// Type alias for the consumer record stream.
+#[cfg(target_arch = "wasm32")]
+pub type BoxConsumerStream =
+    Pin<Box<dyn ConsumerStream<Item = Result<ConsumerRecord, ErrorCode>> + 'static>>;
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxConsumerStream =
+    Pin<Box<dyn ConsumerStream<Item = Result<ConsumerRecord, ErrorCode>> + Send + 'static>>;
+
+type ShararedConsumerStream = Arc<Mutex<BoxConsumerStream>>;
+
+type ConsumerFutureOutput = (
+    ShararedConsumerStream,
+    Option<Result<(ConsumerRecord, Option<i64>), ErrorCode>>,
+);
+
+/// Type alias to access consume stream as a future.
+#[cfg(target_arch = "wasm32")]
+type BoxConsumerFuture = Pin<Box<dyn Future<Output = ConsumerFutureOutput> + 'static>>;
+#[cfg(not(target_arch = "wasm32"))]
+type BoxConsumerFuture = Pin<Box<dyn Future<Output = ConsumerFutureOutput> + Send + 'static>>;
 
 /// An interface for consuming events from a particular partition
 ///
@@ -74,7 +115,7 @@ impl<P> Clone for PartitionConsumer<P> {
 
 impl<P> PartitionConsumer<P>
 where
-    P: SpuDirectory,
+    P: SpuDirectory + 'static,
 {
     pub fn new(
         topic: String,
@@ -150,7 +191,7 @@ where
     pub async fn stream(
         &self,
         offset: Offset,
-    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>>> {
+    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>> + use<P>> {
         let config = ConsumerConfig::builder().build()?;
         let stream = self.stream_with_config(offset, config).await?;
 
@@ -204,7 +245,7 @@ where
         &self,
         offset: Offset,
         config: ConsumerConfig,
-    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>>> {
+    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>> + use<P>> {
         let (stream, start_offset, _) = self
             .inner_stream_batches_with_config(offset, config, None)
             .await?;
@@ -255,15 +296,11 @@ where
     /// # }
     /// ```
     #[instrument(skip(self, offset, config))]
-    #[deprecated(
-        since = "0.21.8",
-        note = "use `Fluvio::consumer_with_config()` instead"
-    )]
     pub async fn stream_batches_with_config(
         &self,
         offset: Offset,
         config: ConsumerConfig,
-    ) -> Result<impl Stream<Item = Result<Batch, ErrorCode>>> {
+    ) -> Result<impl Stream<Item = Result<Batch, ErrorCode>> + use<P>> {
         let (stream, _start_offset, _) = self
             .inner_stream_batches_with_config(offset, config, None)
             .await?;
@@ -279,7 +316,7 @@ where
         config: ConsumerConfig,
         consumer_id: Option<String>,
     ) -> Result<(
-        impl Stream<Item = Result<Batch, ErrorCode>>,
+        impl Stream<Item = Result<Batch, ErrorCode>> + use<P>,
         fluvio_protocol::record::Offset,
         Sender<StreamToServer>,
     )> {
@@ -305,7 +342,20 @@ where
                         .records
                         .batches
                         .into_iter()
-                        .map(move |raw_batch| {
+                        .filter_map(move |raw_batch| {
+                            // A StreamFetchResponse may contain a trailing batch that was only
+                            // partially transmitted/decoded. `validate_decoding()` detects this by
+                            // comparing the declared batch length against the decoded bytes.
+                            if !raw_batch.validate_decoding() {
+                                tracing::debug!(
+                                    base_offset = raw_batch.base_offset,
+                                    batch_len = raw_batch.batch_len(),
+                                    records_len = raw_batch.records_len(),
+                                    "skipping invalid (partially decoded) batch"
+                                );
+                                return None;
+                            }
+
                             inner_metrics
                                 .consumer()
                                 .add_records(raw_batch.records_len() as u64);
@@ -314,13 +364,13 @@ where
                                 .add_bytes(raw_batch.batch_len() as u64);
 
                             let batch: Result<Batch, _> = raw_batch.try_into();
-                            match batch {
+                            Some(match batch {
                                 Ok(batch) => Ok(batch),
                                 Err(err) => {
                                     tracing::error!("{err:?}");
                                     Err(ErrorCode::Other(err.to_string()))
                                 }
-                            }
+                            })
                         });
                 let error = {
                     let code = response.partition.error_code;
@@ -348,7 +398,7 @@ where
         config: ConsumerConfig,
         consumer_id: Option<String>,
     ) -> Result<(
-        impl Stream<Item = Result<DefaultStreamFetchResponse, ErrorCode>>,
+        impl Stream<Item = Result<DefaultStreamFetchResponse, ErrorCode>> + use<P>,
         fluvio_protocol::record::Offset,
         Sender<StreamToServer>,
     )> {
@@ -357,9 +407,32 @@ where
 
         let replica = ReplicaKey::new(&self.topic, self.partition);
         let mut serial_socket = self.pool.create_serial_socket(&replica).await?;
-        let offsets = fetch_offsets(&mut serial_socket, &replica, consumer_id.clone()).await?;
 
-        let start_absolute_offset = offset.resolve(&offsets).await?;
+        let consumer_offset = if let Some(ref consumer_id) = consumer_id {
+            let consumer_offset_socket = self.create_serial_socket_retry().await?;
+            let response = consumer_offset_socket
+                .send_receive(FetchConsumerOffsetsRequest::with_opts(
+                    Some((self.topic.to_owned(), self.partition).into()),
+                    Some(consumer_id.clone()),
+                ))
+                .await?;
+            if response.error_code != ErrorCode::None {
+                error!("Error getting consumer offset: {:#?}", response.error_code);
+                return Err(response.error_code.into());
+            }
+
+            response
+                .consumers
+                .iter()
+                .map(|consumer| consumer.offset + 1)
+                .next()
+        } else {
+            None
+        };
+
+        let offsets = fetch_offsets(&mut serial_socket, &replica).await?;
+
+        let start_absolute_offset = offset.resolve(&offsets, consumer_offset).await?;
         let end_absolute_offset = offsets.last_stable_offset;
         let record_count = end_absolute_offset - start_absolute_offset;
 
@@ -382,7 +455,9 @@ where
             .unwrap_or(CHAIN_SMARTMODULE_API - 1);
         debug!(%stream_fetch_version, "stream_fetch_version");
         if stream_fetch_version < CHAIN_SMARTMODULE_API {
-            warn!("SPU does not support SmartModule chaining. SmartModules will not be applied to the stream");
+            warn!(
+                "SPU does not support SmartModule chaining. SmartModules will not be applied to the stream"
+            );
         }
         if with_consumer_id && stream_fetch_version < OFFSET_MANAGEMENT_API {
             warn!("SPU does not support Offset Management API");
@@ -513,12 +588,41 @@ where
         Ok((stream, start_absolute_offset, server_sender))
     }
 
+    async fn create_serial_socket_retry(&self) -> Result<VersionedSerialSocket> {
+        let mut attempts = 0;
+        let mut backoff = create_backoff()?;
+        loop {
+            match self
+                .pool
+                .create_serial_socket(&CONSUMER_REPLICA_KEY.into())
+                .await
+            {
+                Ok(socket) => return Ok(socket),
+                Err(err) => {
+                    error!("Failed to create consumer offset socket: {:#?}", err);
+
+                    backoff_and_wait(&mut backoff).await;
+                    attempts += 1;
+
+                    if attempts >= MAX_ATTEMPTS_CONSUMER_OFFSET {
+                        return Err(ErrorCode::Other(
+                            "Failed to create consumer offset socket".to_string(),
+                        )
+                        .into());
+                    }
+                }
+            };
+        }
+    }
+
     #[instrument(skip(self, config))]
     pub(crate) async fn consumer_stream_with_config(
-        &self,
+        self,
         config: ConsumerConfigExt,
-    ) -> Result<SinglePartitionConsumerStream<impl Stream<Item = Result<Record, ErrorCode>>>> {
-        let (offset, config, consumer_id, strategy, flush_period) = config.into_parts();
+    ) -> Result<SinglePartitionConsumerStream<impl Stream<Item = Result<Record, ErrorCode>> + use<P>>>
+    {
+        let (offset, config, consumer_id, strategy, flush_period, flusher_check_period) =
+            config.into_parts();
         let (stream, start_offset, stream_to_server) = self
             .inner_stream_batches_with_config(offset, config, consumer_id)
             .await?;
@@ -543,6 +647,7 @@ where
             flattened,
             strategy,
             flush_period,
+            flusher_check_period,
             stream_to_server,
         ))
     }
@@ -766,7 +871,7 @@ impl MultiplePartitionConsumer {
     pub async fn stream(
         &self,
         offset: Offset,
-    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>>> {
+    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>> + use<>> {
         let config = ConsumerConfig::builder().build()?;
         let stream = self.stream_with_config(offset, config).await?;
 
@@ -821,8 +926,8 @@ impl MultiplePartitionConsumer {
         &self,
         offset: Offset,
         config: ConsumerConfig,
-    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>>> {
-        let consumers = self
+    ) -> Result<impl Stream<Item = Result<Record, ErrorCode>> + use<>> {
+        let consumers: Vec<_> = self
             .strategy
             .selection(self.pool.clone())
             .await?
@@ -835,15 +940,16 @@ impl MultiplePartitionConsumer {
                     self.metrics.clone(),
                 )
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        let streams_future = consumers
-            .iter()
-            .map(|consumer| consumer.stream_with_config(offset.clone(), config.clone()));
+        // Create futures that own their consumers to enable concurrent execution
+        let stream_futures = consumers.into_iter().map(|consumer| {
+            let offset = offset.clone();
+            let config = config.clone();
+            async move { consumer.stream_with_config(offset, config).await }
+        });
 
-        let streams_result = join_all(streams_future).await;
-
-        let streams = streams_result.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let streams = try_join_all(stream_futures).await?;
 
         Ok(select_all(streams))
     }
@@ -876,6 +982,21 @@ impl<T> StreamToServerCallback<T> {
             }
         }
     }
+}
+
+/// Creates an exponential backoff configuration.
+fn create_backoff() -> Result<ExponentialBackoff> {
+    ExponentialBackoffBuilder::default()
+        .factor(RECONNECT_BACKOFF_FACTOR)
+        .min(RECONNECT_BACKOFF_MIN_DURATION)
+        .max(RECONNECT_BACKOFF_MAX_DURATION)
+        .build()
+}
+
+/// Waits for the duration determined by the exponential backoff.
+async fn backoff_and_wait(backoff: &mut ExponentialBackoff) {
+    let wait_duration = backoff.wait();
+    let _ = sleep(wait_duration).await;
 }
 
 #[cfg(test)]

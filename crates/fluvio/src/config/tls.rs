@@ -10,9 +10,11 @@ use fluvio_future::net::{DomainConnector, DefaultDomainConnector};
 /// Describes whether or not to use TLS and how
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "tls_policy")]
+#[derive(Default)]
 pub enum TlsPolicy {
     /// Do not use TLS
     #[serde(rename = "disabled", alias = "disable")]
+    #[default]
     Disabled,
     /// Use TLS, but do not verify certificates or domains
     ///
@@ -22,12 +24,6 @@ pub enum TlsPolicy {
     /// Use TLS and verify certificates and domains
     #[serde(rename = "verified", alias = "verify")]
     Verified(TlsConfig),
-}
-
-impl Default for TlsPolicy {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 impl From<TlsConfig> for TlsPolicy {
@@ -241,12 +237,28 @@ cfg_if::cfg_if! {
                 }
             }
         }
-    }  else if #[cfg(feature = "rustls")] {
+    } else if #[cfg(feature = "rustls")] {
 
         impl TryFrom<TlsPolicy> for DomainConnector {
-            type Error = IoError;
+            type Error = anyhow::Error;
 
             fn try_from(config: TlsPolicy) -> Result<Self, Self::Error> {
+
+                if rustls::crypto::CryptoProvider::get_default().is_none() {
+                    cfg_if::cfg_if! {
+                        if #[cfg(feature = "rustls-ring")] {
+                            info!("Using rustls-ring as crypto provider");
+                            let _ = rustls::crypto::ring::default_provider().install_default();
+                        } else if #[cfg(feature = "rustls-aws")] {
+                            info!("Using aws-lc-rs as crypto provider");
+                            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+                        } else {
+                            let err_msg = "No crypto provider selected for rustls, please enable either aws-lc-rs or ring feature";
+                            error!("{error_msg}");
+                            return Err(anyhow::anyhow!(err_msg));
+                        }
+                    }
+                }
 
 
                 use fluvio_future::rust_tls:: ConnectorBuilder;
@@ -269,7 +281,7 @@ cfg_if::cfg_if! {
                             ca_cert_path = ?tls.ca_cert,
                             client.cert = ?tls.cert,
                             client.key = ?tls.key,
-                            "Using verified TLS with certificates from paths"
+                            "Using verified TLS with rustls and certificates from paths"
                         );
 
                         let connector = ConnectorBuilder::with_safe_defaults()
@@ -286,7 +298,7 @@ cfg_if::cfg_if! {
                     TlsPolicy::Verified(TlsConfig::Inline(tls)) => {
                         info!(
                             domain = &*tls.domain,
-                            "Using verified TLS with inline certificates"
+                            "Using verified TLS with rustls and inline certificates"
                         );
                         let connector = ConnectorBuilder::with_safe_defaults()
                         .load_ca_cert_from_bytes(tls.ca_cert.as_bytes())?

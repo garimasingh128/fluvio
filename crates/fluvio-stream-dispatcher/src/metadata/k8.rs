@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(updates.len(), 3);
 
         assert!(
-            matches!(updates.first(), Some(LSUpdate::Mod(obj)) if obj.status.to_string().eq(""))
+            matches!(updates.first(), Some(LSUpdate::Mod(obj)) if obj.status.to_string().is_empty())
         );
         assert!(
             matches!(updates.get(1), Some(LSUpdate::Mod(obj)) if obj.status.to_string().eq("new status"))
@@ -536,11 +536,13 @@ mod tests {
                 .name,
             "parent"
         );
-        assert!(items.items[0]
-            .ctx()
-            .item()
-            .inner()
-            .finalizers
-            .contains(&"FINALIZER1".to_string()));
+        assert!(
+            items.items[0]
+                .ctx()
+                .item()
+                .inner()
+                .finalizers
+                .contains(&"FINALIZER1".to_string())
+        );
     }
 }

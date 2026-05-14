@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use anyhow::Result;
 
-use fluvio::FluvioConfig;
+use fluvio::FluvioClusterConfig;
 use fluvio_controlplane_metadata::smartmodule::{SmartModuleWasm, SmartModuleSpec, SmartModuleMetadata};
 use fluvio_extension_common::target::ClusterTarget;
 use fluvio::Fluvio;
@@ -11,8 +11,7 @@ use cargo_builder::package::PackageInfo;
 
 use crate::cmd::PackageCmd;
 use crate::ENV_SMDK_NOWASI;
-
-pub const DEFAULT_META_LOCATION: &str = "SmartModule.toml";
+use crate::SMARTMODULE_TOML;
 
 /// Load SmartModule into Fluvio cluster
 #[derive(Debug, Parser)]
@@ -56,7 +55,7 @@ impl LoadCmd {
         let package_info = PackageInfo::from_options(&opt)?;
 
         // load ./SmartModule.toml relative to the project root
-        let sm_toml = package_info.package_relative_path(DEFAULT_META_LOCATION);
+        let sm_toml = package_info.package_relative_path(SMARTMODULE_TOML);
         let pkg_metadata = SmartModuleMetadata::from_toml(sm_toml.as_path())?;
         println!("Found SmartModule package: {}", pkg_metadata.package.name);
 
@@ -96,7 +95,7 @@ impl LoadCmd {
 }
 
 async fn create(
-    config: FluvioConfig,
+    config: FluvioClusterConfig,
     spec: SmartModuleSpec,
     id: String,
     dry_run: bool,

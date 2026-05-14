@@ -1,12 +1,12 @@
 [package]
 name = "fluvio-spu"
-edition = "2021"
-version = "0.0.0"
-authors = ["fluvio.io"]
 description = "Fluvio Stream Processing Unit"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [lib]
 name = "fluvio_spu"
@@ -58,7 +58,6 @@ flv-tls-proxy = { workspace = true }
 flv-util = { workspace = true }
 fluvio-future = { workspace = true,features = [
     "subscriber",
-    "openssl_tls",
     "zero_copy",
 ] }
 fluvio-smartengine = { workspace = true, optional = true, features = ["engine"] }
@@ -71,6 +70,7 @@ derive_builder =  { workspace = true }
 serde_json = { workspace = true }
 flate2 = { workspace = true }
 portpicker = { workspace = true }
+rand = { workspace = true }
 
 flv-util = { workspace = true, features = ["fixture"] }
 fluvio-future = { workspace = true,features = ["fixture", "subscriber"] }

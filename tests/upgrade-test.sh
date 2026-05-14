@@ -52,11 +52,7 @@ function cleanup() {
 # If we're in CI, we want to slow down execution
 # to give CPU some time to rest, so we don't time out
 function ci_check() {
-    if [[ "$FLUVIO_MODE" == "local" ]]; then
-        sleep $CI_SLEEP
-    else
-        :
-    fi
+	sleep $CI_SLEEP
 }
 
 # This function is intended to be run second after the Stable-1 validation
@@ -68,7 +64,7 @@ function validate_cluster_stable() {
     echo "Install (current stable) CLI"
     unset VERSION
 
-    curl -fsS https://hub.infinyon.cloud/install/install.sh?ctx=ci | bash
+    curl -fsS https://raw.githubusercontent.com/fluvio-community/fluvio/master/install.sh | bash
     
     ~/.fvm/bin/fvm install stable | tee /tmp/installer.output 
     STABLE_VERSION=$(cat /tmp/installer.output | grep "fluvio@" | awk '{print $4}' | cut -b 8-)

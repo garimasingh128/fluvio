@@ -20,6 +20,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub mod future {
     pub use fluvio_future::task::run_block_on;
+    pub use tokio::select;
     pub use fluvio_future::subscriber::init_logger;
     pub use fluvio_future::retry;
 }
@@ -59,7 +60,7 @@ pub async fn ensure_topic_exists(config: &config::ConnectorConfig) -> Result<()>
             )
             .await
         {
-            Ok(_) => info!(topic, "succesfully created"),
+            Ok(_) => info!(topic, "successfully created"),
             Err(err) => {
                 error!("unable to create topic {topic}: {err}");
                 return Err(err);

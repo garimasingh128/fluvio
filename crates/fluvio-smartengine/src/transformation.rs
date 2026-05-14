@@ -1,16 +1,16 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{self, Display},
-    path::PathBuf,
-    fs::File,
-    io::Read,
-    ops::Deref,
-    time::Duration,
-};
+use std::collections::BTreeMap;
+use std::fmt::{self, Display};
+use std::path::PathBuf;
+use std::fs::File;
+use std::io::Read;
+use std::ops::Deref;
+use std::time::Duration;
+
 use serde::{
     Deserialize, Serialize, Deserializer,
     de::{Visitor, self, SeqAccess, MapAccess},
 };
+use schemars::JsonSchema;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct TransformationConfig {
@@ -47,7 +47,7 @@ impl<T: Deref<Target = str>> TryFrom<Vec<T>> for TransformationConfig {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
 pub struct TransformationStep {
     pub uses: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,12 +56,13 @@ pub struct TransformationStep {
     pub with: BTreeMap<String, JsonString>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct Lookback {
     #[serde(default)]
     pub last: u64,
     #[serde(default, with = "humantime_serde")]
+    #[schemars(with = "Option::<String>")]
     pub age: Option<Duration>,
 }
 
@@ -94,7 +95,7 @@ impl From<Lookback> for fluvio_smartmodule::dataplane::smartmodule::Lookback {
     }
 }
 
-#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct JsonString(String);
 
 impl From<JsonString> for String {
@@ -197,7 +198,7 @@ mod tests {
             TransformationConfig {
                 transforms: vec![
                     TransformationStep {
-                        uses: "infinyon/jolt@0.1.0".to_string(),
+                        uses: "infinyon/jolt@0.4.1".to_string(),
                         lookback: Some(Lookback{ last: 0, age: Some(Duration::from_secs(3600 * 24 * 7)) }),
                         with: BTreeMap::from([(
                             "spec".to_string(),
@@ -205,7 +206,7 @@ mod tests {
                         )])
                     },
                     TransformationStep {
-                        uses: "infinyon/jolt@0.1.0".to_string(),
+                        uses: "infinyon/jolt@0.4.1".to_string(),
                         lookback: Some(Lookback{ last: 1, age: None }),
                         with: BTreeMap::from([(
                             "spec".to_string(),
@@ -213,7 +214,7 @@ mod tests {
                         )])
                     },
                     TransformationStep {
-                        uses: "infinyon/json-sql@0.1.0".to_string(),
+                        uses: "infinyon/json-sql@0.2.1".to_string(),
                         lookback: Some(Lookback{ last: 10, age: Some(Duration::from_secs(12)) }),
                         with: BTreeMap::from([(
                             "mapping".to_string(),
@@ -240,8 +241,8 @@ mod tests {
     fn test_from_vec() {
         //given
         let vec = vec![
-            r#"{"uses":"infinyon/jolt@0.1.0","invoke":"insert","with":{"spec":"[{\"operation\":\"remove\",\"spec\":{\"length\":\"\"}}]"}}"#,
-            r#"{"uses":"infinyon/json-sql@0.1.0","invoke":"insert","with":{"mapping":"{\"table\":\"topic_message_demo\",\"map-columns\":{\"fact\":{\"json-key\":\"fact\",\"value\":{\"type\":\"text\",\"required\":true}},\"record\":{\"json-key\":\"$\",\"value\":{\"type\":\"jsonb\",\"required\":true}}}}"}}"#,
+            r#"{"uses":"infinyon/jolt@0.4.1","invoke":"insert","with":{"spec":"[{\"operation\":\"remove\",\"spec\":{\"length\":\"\"}}]"}}"#,
+            r#"{"uses":"infinyon/json-sql@0.2.1","invoke":"insert","with":{"mapping":"{\"table\":\"topic_message_demo\",\"map-columns\":{\"fact\":{\"json-key\":\"fact\",\"value\":{\"type\":\"text\",\"required\":true}},\"record\":{\"json-key\":\"$\",\"value\":{\"type\":\"jsonb\",\"required\":true}}}}"}}"#,
         ];
 
         //when
@@ -249,7 +250,7 @@ mod tests {
 
         //then
         assert_eq!(config.transforms.len(), 2);
-        assert_eq!(config.transforms[0].uses, "infinyon/jolt@0.1.0");
+        assert_eq!(config.transforms[0].uses, "infinyon/jolt@0.4.1");
         assert_eq!(
             config.transforms[0].with,
             BTreeMap::from([(
@@ -258,12 +259,12 @@ mod tests {
             )])
         );
 
-        assert_eq!(config.transforms[1].uses, "infinyon/json-sql@0.1.0");
+        assert_eq!(config.transforms[1].uses, "infinyon/json-sql@0.2.1");
         assert_eq!(
             config.transforms[1].with,
             BTreeMap::from([(
                 "mapping".to_string(),
-                JsonString("{\"table\":\"topic_message_demo\",\"map-columns\":{\"fact\":{\"json-key\":\"fact\",\"value\":{\"type\":\"text\",\"required\":true}},\"record\":{\"json-key\":\"$\",\"value\":{\"type\":\"jsonb\",\"required\":true}}}}".to_string()) 
+                JsonString("{\"table\":\"topic_message_demo\",\"map-columns\":{\"fact\":{\"json-key\":\"fact\",\"value\":{\"type\":\"text\",\"required\":true}},\"record\":{\"json-key\":\"$\",\"value\":{\"type\":\"jsonb\",\"required\":true}}}}".to_string())
             )])
         );
     }

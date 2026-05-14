@@ -1,17 +1,17 @@
-use std::{path::PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use anyhow::{Result, anyhow};
 
 use fluvio_controlplane_metadata::partition::ReplicaKey;
+use fluvio_future::timer::sleep;
 use fluvio_protocol::record::Offset;
 use fluvio_future::task::run_block_on;
+use fluvio_storage::checkpoint::{CheckPoint, HW_CHECKPOINT_FILE_NAME};
 use fluvio_storage::{
-    LogIndex, OffsetPosition,
-    batch_header::BatchHeaderStream,
-    segment::{MutableSegment},
-    config::{ReplicaConfig},
-    FileReplica, ReplicaStorage,
+    LogIndex, OffsetPosition, batch_header::BatchHeaderStream, segment::MutableSegment,
+    config::ReplicaConfig, FileReplica, ReplicaStorage,
 };
 use fluvio_storage::records::FileRecords;
 
@@ -35,6 +35,8 @@ enum Main {
     /// show information about replica
     #[clap(name = "replica")]
     Replica(ReplicaOpt),
+
+    Hw(Hw),
 }
 
 fn main() {
@@ -48,6 +50,7 @@ fn main() {
             Main::Index(opt) => dump_index(opt).await,
             Main::ValidateSegment(opt) => validate_segment(opt).await,
             Main::Replica(opt) => replica_info(opt).await,
+            Main::Hw(hw) => hw.process().await,
         }
     });
     if let Err(err) = result {
@@ -76,12 +79,11 @@ pub(crate) struct LogOpt {
 }
 
 async fn dump_log(opt: LogOpt) -> Result<()> {
-    if let Some(max) = opt.max {
-        if let Some(min) = opt.min {
-            if min > max {
-                return Err(anyhow!("min > max"));
-            }
-        }
+    if let Some(max) = opt.max
+        && let Some(min) = opt.min
+        && min > max
+    {
+        return Err(anyhow!("min > max"));
     }
 
     println!("opening: {:#?} position: {}", opt.file_name, opt.position);
@@ -102,15 +104,15 @@ async fn dump_log(opt: LogOpt) -> Result<()> {
 
                 let base_offset = batch.get_base_offset();
 
-                if let Some(min) = opt.min {
-                    if (base_offset as usize) < min {
-                        continue;
-                    }
+                if let Some(min) = opt.min
+                    && (base_offset as usize) < min
+                {
+                    continue;
                 }
-                if let Some(max) = opt.max {
-                    if (base_offset as usize) > max {
-                        break;
-                    }
+                if let Some(max) = opt.max
+                    && (base_offset as usize) > max
+                {
+                    break;
                 }
 
                 if opt.print {
@@ -247,4 +249,48 @@ pub(crate) async fn replica_info(opt: ReplicaOpt) -> Result<()> {
     println!("leo: {:#?}", replica.get_leo());
 
     Ok(())
+}
+
+/// Command High Water Checkpoint
+#[derive(Debug, Parser)]
+pub(crate) struct Hw {
+    #[arg(long)]
+    path: PathBuf,
+
+    #[arg(long)]
+    offset: Option<Offset>,
+}
+
+impl Hw {
+    /// print out hw in the check point
+    async fn process(self) -> Result<()> {
+        let config = ReplicaConfig {
+            base_dir: self.path,
+            ..Default::default()
+        };
+
+        if let Some(offset) = self.offset {
+            println!("writing hw: {offset} to checkpoint");
+            let mut commit_checkpoint =
+                CheckPoint::create(Arc::new(config.into()), HW_CHECKPOINT_FILE_NAME, offset)
+                    .await?;
+            commit_checkpoint.write(offset);
+            sleep(std::time::Duration::from_secs(1)).await;
+            println!("hw: {offset} written to checkpoint");
+            return Ok(());
+        }
+
+        let commit_checkpoint =
+            CheckPoint::create(Arc::new(config.into()), HW_CHECKPOINT_FILE_NAME, 0).await?;
+
+        let hw = commit_checkpoint.get_offset();
+        let time = commit_checkpoint.get_last_modified().await?;
+
+        let elapsed = time.elapsed()?;
+        let human_elapsed = humantime::format_duration(elapsed).to_string();
+
+        println!("hw: {hw},  modified: {human_elapsed}");
+
+        Ok(())
+    }
 }

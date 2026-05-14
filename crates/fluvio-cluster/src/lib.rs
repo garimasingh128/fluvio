@@ -41,7 +41,7 @@ mod process;
 pub mod cli;
 use fluvio_helm as helm;
 
-pub use start::k8::{ClusterInstaller, ClusterConfig, ClusterConfigBuilder};
+pub use start::k8::{ClusterInstaller, ClusterConfig, ClusterConfigBuilder, DEFAULT_SPU_GROUP_NAME};
 pub use start::local::{LocalInstaller, LocalConfig, LocalConfigBuilder};
 pub use error::{ClusterError, K8InstallError, LocalInstallError, UninstallError};
 pub use helm::HelmError;
@@ -100,7 +100,7 @@ mod common {
         Remote(String),
     }
 
-    pub fn tls_config_to_cert_paths(config: &TlsConfig) -> Result<Cow<TlsPaths>> {
+    pub fn tls_config_to_cert_paths(config: &TlsConfig) -> Result<Cow<'_, TlsPaths>> {
         use std::fs::write;
         use rand::distributions::Alphanumeric;
         use std::iter;

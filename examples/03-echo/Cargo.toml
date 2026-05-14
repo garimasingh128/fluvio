@@ -2,14 +2,14 @@
 name = "echo"
 version = "0.0.0"
 authors = ["Fluvio Contributors <team@fluvio.io>"]
-edition = "2021"
+edition = "2024"
 publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 futures = { workspace = true }
-async-std = { workspace = true, features = ["attributes"] }
+tokio = { workspace = true }
 anyhow = { workspace = true }
 
 fluvio = { workspace = true  }

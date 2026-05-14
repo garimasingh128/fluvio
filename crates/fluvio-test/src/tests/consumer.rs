@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use fluvio_types::PartitionId;
-use futures_lite::stream::StreamExt;
+use futures::{Stream, StreamExt};
 use tokio::select;
 use hdrhistogram::Histogram;
 
@@ -16,7 +16,6 @@ use fluvio_test_derive::fluvio_test;
 use fluvio_test_util::test_meta::environment::EnvironmentSetup;
 use fluvio_test_util::test_meta::{TestOption, TestCase};
 use fluvio_test_util::async_process;
-use fluvio_future::io::Stream;
 
 use crate::tests::{TestRecord, TestRecordBuilder};
 
@@ -192,7 +191,9 @@ where
         records_recvd == 0 && !test_case.option.allow_empty_topic
     );
     if records_recvd == 0 && !test_case.option.allow_empty_topic {
-        panic!("Consumer test failed, received no records. If this is intentional, run with --allow-empty-topic");
+        panic!(
+            "Consumer test failed, received no records. If this is intentional, run with --allow-empty-topic"
+        );
     }
 
     let consume_p99 = Duration::from_nanos(latency_histogram.value_at_percentile(0.99));

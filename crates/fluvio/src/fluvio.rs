@@ -1,43 +1,38 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use fluvio_sc_schema::partition::PartitionMirrorConfig;
-use fluvio_sc_schema::topic::MirrorConfig;
-use fluvio_sc_schema::topic::PartitionMap;
-use fluvio_sc_schema::topic::ReplicaSpec;
-use tracing::{debug, info};
+use anyhow::{Context, Result};
+use fluvio_types::defaults::CONSUMER_REPLICA_KEY;
+use semver::Version;
 use tokio::sync::OnceCell;
-use anyhow::{anyhow, Result};
+use tracing::{debug, info};
 
+use fluvio_future::net::DomainConnector;
+use fluvio_sc_schema::partition::PartitionMirrorConfig;
+use fluvio_sc_schema::topic::{MirrorConfig, PartitionMap, ReplicaSpec};
 use fluvio_sc_schema::objects::ObjectApiWatchRequest;
 use fluvio_types::PartitionId;
 use fluvio_socket::{
     ClientConfig, Versions, VersionedSerialSocket, SharedMultiplexerSocket, MultiplexerSocket,
 };
-use fluvio_future::net::DomainConnector;
-use semver::Version;
 
 use crate::admin::FluvioAdmin;
-use crate::producer::TopicProducerPool;
-use crate::spu::SpuPool;
-use crate::TopicProducer;
-use crate::PartitionConsumer;
-
-use crate::FluvioError;
-use crate::FluvioConfig;
-use crate::consumer::{MultiplePartitionConsumer, PartitionSelectionStrategy};
 use crate::consumer::{
-    ConsumerStream, MultiplePartitionConsumerStream, Record, ConsumerConfigExt, ConsumerOffset,
+    ConsumerConfigExt, ConsumerOffset, ConsumerRetryStream, ConsumerStream,
+    MultiplePartitionConsumer, MultiplePartitionConsumerStream, PartitionSelectionStrategy, Record,
 };
+use crate::error::anyhow_version_error;
 use crate::metrics::ClientMetrics;
-use crate::producer::TopicProducerConfig;
-use crate::spu::SpuSocketPool;
+use crate::producer::{TopicProducerPool, TopicProducerConfig};
 use crate::sync::MetadataStores;
+use crate::spu::{SpuPool, SpuSocketPool};
+use crate::{TopicProducer, PartitionConsumer, FluvioError, FluvioClusterConfig};
 
 /// An interface for interacting with Fluvio streaming
 pub struct Fluvio {
     socket: SharedMultiplexerSocket,
     config: Arc<ClientConfig>,
+    cluster_config: FluvioClusterConfig,
     versions: Versions,
     spu_pool: OnceCell<Arc<SpuSocketPool>>,
     metadata: MetadataStores,
@@ -62,7 +57,7 @@ impl Fluvio {
     /// # }
     /// ```
     pub async fn connect() -> Result<Self> {
-        let cluster_config = FluvioConfig::load()?;
+        let cluster_config = FluvioClusterConfig::load()?;
         Self::connect_with_config(&cluster_config).await
     }
 
@@ -71,7 +66,7 @@ impl Fluvio {
     /// # Example
     ///
     /// ```no_run
-    /// # use fluvio::{Fluvio, FluvioError, FluvioConfig};
+    /// # use fluvio::{Fluvio, FluvioError, FluvioClusterConfig};
     /// use fluvio::config::ConfigFile;
     /// # async fn do_connect_with_config() -> anyhow::Result<()> {
     /// let config_file = ConfigFile::load_default_or_new()?;
@@ -80,7 +75,15 @@ impl Fluvio {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect_with_config(config: &FluvioConfig) -> Result<Self> {
+    pub async fn connect_with_config(config: &FluvioClusterConfig) -> Result<Self> {
+        // if crate tls is not configured and the profile has tls, return an error
+        #[cfg(not(any(feature = "openssl", feature = "rustls")))]
+        if crate::config::TlsPolicy::Disabled != config.tls {
+            return Err(anyhow::anyhow!(
+                "Error: cluster config requires TLS, but client was not built with TLS features.\nPlease enable the `openssl` feature."
+            ));
+        }
+
         let connector = DomainConnector::try_from(config.tls.clone())?;
         info!(
             fluvio_crate_version = env!("CARGO_PKG_VERSION"),
@@ -89,15 +92,39 @@ impl Fluvio {
         Self::connect_with_connector(connector, config).await
     }
 
+    /// Creates a new Fluvio client with the given profile
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use fluvio::{Fluvio, FluvioError, FluvioClusterConfig};
+    /// use fluvio::config::ConfigFile;
+    /// # async fn do_connect_with_profile_name() -> anyhow::Result<()> {
+    /// let fluvio = Fluvio::connect_with_profile("local").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_with_profile(profile: &str) -> Result<Self> {
+        let config = FluvioClusterConfig::load_with_profile(profile)?.context(format!(
+            "Failed to load cluster config with profile `{profile}`"
+        ))?;
+        Self::connect_with_config(&config).await
+    }
+
+    /// Creates a new Fluvio client with the given connector and configuration
     pub async fn connect_with_connector(
         connector: DomainConnector,
-        config: &FluvioConfig,
+        cluster_config: &FluvioClusterConfig,
     ) -> Result<Self> {
-        let mut client_config =
-            ClientConfig::new(&config.endpoint, connector, config.use_spu_local_address);
-        if let Some(client_id) = &config.client_id {
+        let mut client_config = ClientConfig::new(
+            &cluster_config.endpoint,
+            connector.clone(),
+            cluster_config.use_spu_local_address,
+        );
+        if let Some(client_id) = &cluster_config.client_id {
             client_config.set_client_id(client_id.to_owned());
         }
+        //Self::connect_with_client_config(client_config, fluvio_config).await
         let inner_client = client_config.connect().await?;
         debug!("connected to cluster");
 
@@ -115,6 +142,7 @@ impl Fluvio {
             Ok(Self {
                 socket,
                 config,
+                cluster_config: cluster_config.clone(),
                 versions,
                 spu_pool,
                 metadata,
@@ -122,9 +150,8 @@ impl Fluvio {
                 metric: Arc::new(ClientMetrics::new()),
             })
         } else {
-            let platform_version = versions.platform_version();
-            let client_version = crate::VERSION.trim();
-            Err(anyhow!("Fluvio Client {client_version} and Cluster {platform_version} versions are not compatible. Please upgrade client to {platform_version}"))
+            let platform_version = versions.platform_version().to_string();
+            Err(anyhow_version_error(&platform_version))
         }
     }
 
@@ -139,6 +166,11 @@ impl Fluvio {
             })
             .await
             .cloned()
+    }
+
+    // get client config
+    pub(crate) fn client_config(&self) -> Arc<ClientConfig> {
+        self.config.clone()
     }
 
     /// Creates a new `TopicProducer` for the given topic name
@@ -285,7 +317,7 @@ impl Fluvio {
     ///        .await?;
     ///    while let Some(Ok(record)) = stream.next().await {
     ///        println!("{}", String::from_utf8_lossy(record.as_ref()));
-    ///        stream.offset_commit()?;
+    ///        stream.offset_commit().await?;
     ///        stream.offset_flush().await?;
     ///    }
     ///    Ok(())
@@ -316,12 +348,23 @@ impl Fluvio {
     ///    Ok(())
     /// }
     /// ```
-
     pub async fn consumer_with_config(
         &self,
         config: ConsumerConfigExt,
     ) -> Result<
-        impl ConsumerStream<Item = std::result::Result<Record, fluvio_protocol::link::ErrorCode>>,
+        impl ConsumerStream<Item = std::result::Result<Record, fluvio_protocol::link::ErrorCode>>
+        + use<>,
+    > {
+        ConsumerRetryStream::new(self, self.cluster_config.clone(), config).await
+    }
+
+    /// Creates a new [ConsumerStream] instance without retry logic.
+    pub(crate) async fn consumer_with_config_inner(
+        &self,
+        config: ConsumerConfigExt,
+    ) -> Result<
+        impl ConsumerStream<Item = std::result::Result<Record, fluvio_protocol::link::ErrorCode>>
+        + use<>,
     > {
         let spu_pool = self.spu_pool().await?;
         let topic = &config.topic;
@@ -332,16 +375,28 @@ impl Fluvio {
             .ok_or_else(|| FluvioError::TopicNotFound(topic.to_string()))?
             .spec;
 
-        let mirror_partition = if let Some(ref mirror) = &config.mirror {
+        let mirror_partition = if let Some(mirror) = &config.mirror {
             match topic_spec.replicas() {
                 ReplicaSpec::Mirror(MirrorConfig::Home(home_mirror_config)) => {
                     let partitions_maps =
                         Vec::<PartitionMap>::from(home_mirror_config.as_partition_maps());
                     partitions_maps.iter().find_map(|p| {
-                        if let Some(PartitionMirrorConfig::Home(remote)) = &p.mirror {
-                            if remote.remote_cluster == *mirror {
-                                return Some(p.id);
-                            }
+                        if let Some(PartitionMirrorConfig::Home(remote)) = &p.mirror
+                            && remote.remote_cluster == *mirror
+                        {
+                            return Some(p.id);
+                        }
+                        None
+                    })
+                }
+                ReplicaSpec::Mirror(MirrorConfig::Remote(remote_mirror_config)) => {
+                    let partitions_maps =
+                        Vec::<PartitionMap>::from(remote_mirror_config.as_partition_maps());
+                    partitions_maps.iter().find_map(|p| {
+                        if let Some(PartitionMirrorConfig::Remote(remote)) = &p.mirror
+                            && remote.home_cluster == *mirror
+                        {
+                            return Some(p.id);
                         }
                         None
                     })
@@ -370,17 +425,19 @@ impl Fluvio {
 
     /// Returns all consumers offsets that currently available in the cluster.
     pub async fn consumer_offsets(&self) -> Result<Vec<ConsumerOffset>> {
-        use fluvio_protocol::{link::ErrorCode, record::ReplicaKey};
+        use fluvio_protocol::link::ErrorCode;
         use crate::spu::SpuDirectory;
 
         let spu_pool = self.spu_pool().await?;
-        let consumers_replica_id = ReplicaKey::new(
-            fluvio_types::defaults::CONSUMER_STORAGE_TOPIC,
-            <PartitionId as Default>::default(),
-        );
-        let socket = spu_pool.create_serial_socket(&consumers_replica_id).await?;
+        let socket = spu_pool
+            .create_serial_socket(&CONSUMER_REPLICA_KEY.into())
+            .await?;
         let response = socket
-            .send_receive(fluvio_spu_schema::server::consumer_offset::FetchConsumerOffsetsRequest)
+            .send_receive(
+                fluvio_spu_schema::server::consumer_offset::FetchConsumerOffsetsRequest {
+                    ..Default::default()
+                },
+            )
             .await?;
         if response.error_code != ErrorCode::None {
             anyhow::bail!(
@@ -401,16 +458,14 @@ impl Fluvio {
         consumer_id: impl Into<String>,
         replica_id: impl Into<fluvio_protocol::record::ReplicaKey>,
     ) -> Result<()> {
-        use fluvio_protocol::{link::ErrorCode, record::ReplicaKey};
+        use fluvio_protocol::link::ErrorCode;
 
         use crate::spu::SpuDirectory;
 
         let spu_pool = self.spu_pool().await?;
-        let consumers_replica_id = ReplicaKey::new(
-            fluvio_types::defaults::CONSUMER_STORAGE_TOPIC,
-            <PartitionId as Default>::default(),
-        );
-        let socket = spu_pool.create_serial_socket(&consumers_replica_id).await?;
+        let socket = spu_pool
+            .create_serial_socket(&CONSUMER_REPLICA_KEY.into())
+            .await?;
         let response = socket
             .send_receive(
                 fluvio_spu_schema::server::consumer_offset::DeleteConsumerOffsetRequest {
@@ -440,7 +495,7 @@ impl Fluvio {
     /// # }
     /// ```
     pub async fn admin(&self) -> FluvioAdmin {
-        let socket = self.create_serial_client().await;
+        let socket = self.create_serial_client();
         let metadata = self.metadata.clone();
         FluvioAdmin::new(socket, metadata)
     }
@@ -456,7 +511,7 @@ impl Fluvio {
     }
 
     /// create serial connection
-    async fn create_serial_client(&self) -> VersionedSerialSocket {
+    fn create_serial_client(&self) -> VersionedSerialSocket {
         VersionedSerialSocket::new(
             self.socket.clone(),
             self.config.clone(),
@@ -516,7 +571,7 @@ mod wasm_tests {
 
             let (mut _ws, wsstream) = WsMeta::connect(addr, None)
                 .await
-                .map_err(|e| IoError::new(std::io::ErrorKind::Other, e))?;
+                .map_err(|e| IoError::other(e))?;
             let wsstream_clone = wsstream.clone();
             Ok((
                 Box::new(wsstream.into_io()),
@@ -541,7 +596,7 @@ mod wasm_tests {
 
     #[wasm_bindgen_test]
     async fn my_test() {
-        let config = FluvioConfig::new("ws://localhost:3000");
+        let config = FluvioClusterConfig::new("ws://localhost:3000");
         let client =
             Fluvio::connect_with_connector(Box::new(FluvioWebsocketConnector::new()), &config)
                 .await;

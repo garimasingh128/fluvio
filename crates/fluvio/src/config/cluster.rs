@@ -10,11 +10,15 @@ use crate::{config::TlsPolicy, FluvioError};
 
 use super::ConfigFile;
 
+//NOTE: this is to avoid breaking changes as we rename it to FluvioClusterConfig
+/// Fluvio client configuration
+pub type FluvioConfig = FluvioClusterConfig;
+
 /// Fluvio Cluster Target Configuration
 /// This is part of profile
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct FluvioConfig {
+pub struct FluvioClusterConfig {
     /// The address to connect to the Fluvio cluster
     // TODO use a validated address type.
     // We don't want to have a "" address.
@@ -40,12 +44,20 @@ pub struct FluvioConfig {
     pub client_id: Option<String>,
 }
 
-impl FluvioConfig {
+impl FluvioClusterConfig {
     /// get current cluster config from default profile
     pub fn load() -> Result<Self, FluvioError> {
         let config_file = ConfigFile::load_default_or_new()?;
         let cluster_config = config_file.config().current_cluster()?;
         Ok(cluster_config.to_owned())
+    }
+
+    /// get cluster config from profile
+    /// if profile is not found, return None
+    pub fn load_with_profile(profile_name: &str) -> Result<Option<Self>, FluvioError> {
+        let config_file = ConfigFile::load_default_or_new()?;
+        let cluster_config = config_file.config().cluster_with_profile(profile_name);
+        Ok(cluster_config.cloned())
     }
 
     /// Create a new cluster configuration with no TLS.
@@ -97,9 +109,9 @@ impl FluvioConfig {
     }
 }
 
-impl TryFrom<FluvioConfig> for fluvio_socket::ClientConfig {
+impl TryFrom<FluvioClusterConfig> for fluvio_socket::ClientConfig {
     type Error = anyhow::Error;
-    fn try_from(config: FluvioConfig) -> Result<Self, Self::Error> {
+    fn try_from(config: FluvioClusterConfig) -> Result<Self, Self::Error> {
         let connector = fluvio_future::net::DomainConnector::try_from(config.tls.clone())?;
         Ok(Self::new(
             &config.endpoint,

@@ -40,7 +40,7 @@ main() {
     _dir="$(mktemp -d 2>/dev/null || ensure mktemp -d -t fluvio-install)"
     _temp_file="${_dir}/fvm.zip"
     # todo: switch to hub/or fluvio packages download w/ checksum verification
-    _url="https://github.com/infinyon/fluvio/releases/download/dev/fvm-${_target}.zip"
+    _url="https://github.com/fluvio-community/fluvio/releases/download/dev/fvm-${_target}.zip"
 
     # ".zip" will be removed in switch to hub/fluviopkgs
     downloader "${_url}" "${_temp_file}.zip"
@@ -113,11 +113,23 @@ downloader() {
     local _status
     local _url="$1"; shift
     local _file="$1"; shift
+    local _curl_options
+    _curl_options=(--proto '=https' --tlsv1.2 --silent --show-error --fail --location)
+
+    # Check for proxy settings
+    if [ -n "$http_proxy" ] || [ -n "$https_proxy" ] || [ -n "$HTTP_PROXY" ] || [ -n "$HTTPS_PROXY" ]; then
+      local proxy_url="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-$HTTP_PROXY}}}"
+
+      if [ -n "$proxy_url" ]; then
+          _curl_options+=(--proxy "$proxy_url")
+          echo "Using proxy: $proxy_url"
+      fi
+    fi
 
     # allow trap of error
     set +e
     # Use curl for downloads
-    _err=$(curl --proto '=https' --tlsv1.2 --silent --show-error --fail --location "${_url}" --output "${_file}" 2>&1)
+    _err=$(curl "${_curl_options[@]}" "${_url}" --output "${_file}" 2>&1)
     _status=$?
     set -e
 
@@ -442,7 +454,7 @@ abort_prompt_issue() {
     err ""
     err "If you believe this is a bug (or just need help),"
     err "please feel free to file an issue on Github ❤️"
-    err "    https://github.com/infinyon/fluvio/issues/new"
+    err "    https://github.com/fluvio-community/fluvio/issues/new"
     exit 1
 }
 

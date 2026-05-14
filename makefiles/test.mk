@@ -126,8 +126,21 @@ consumer-offsets-test: TEST_ARG_EXTRA=--local $(EXTRA_ARG)
 consumer-offsets-test: DEFAULT_SPU=1
 consumer-offsets-test: REPL=1
 consumer-offsets-test: test-setup
-	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name consumer-offset-single
-	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 5 --topic-name consumer-offset-multiple
+	# auto offsets
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name single-none -- --strategy none
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 5 --topic-name none-multiple -- --strategy none
+	# manual offset
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 5 --topic-name manual-multiple-beginning -- --strategy manual
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name manual-beginning -- --strategy manual --offset-start beginning
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name manual-end -- --strategy manual --offset-start end
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name manual-from-end -- --strategy manual --offset-start from-end
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name manual-from-beginning -- --strategy manual --offset-start from-beginning
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name manual-from-absolute -- --strategy manual --offset-start absolute
+	# auto offset
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name single-auto -- --strategy auto
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 5 --topic-name multiple-auto -- --strategy auto
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 1 --topic-name single-auto-flush -- --strategy auto --offset-flush 2s
+	$(TEST_BIN) consumer_offsets  ${TEST_ARG_COMMON} --partition 5 --topic-name multiple-auto-flush -- --strategy auto --offset-flush 2s
 
 # test rbac with user1 who doesn't have topic creation permission
 # assumes cluster is set
@@ -181,10 +194,23 @@ ifeq (${CI},true)
 # In CI, we expect all artifacts to already be built and loaded for the script
 upgrade-test:
 	./tests/upgrade-test.sh
+else ifeq (${FLUVIO_MODE},local)
+upgrade-test: build-cli
+	./tests/upgrade-test.sh
 else
 # When not in CI (i.e. development), load the dev k8 image before running test
 upgrade-test: build-cli build_k8_image
 	./tests/upgrade-test.sh
+endif
+
+ifeq (${CI},true)
+# In CI, we expect all artifacts to already be built and loaded for the script
+resume-test:
+	./tests/local-resume-test.sh
+else
+# When not in CI (i.e. development), load the dev k8 image before running test
+resume-test: build-cli
+	./tests/local-resume-test.sh
 endif
 
 # When running in development, might need to run `cargo clean` to ensure correct fluvio binary is used
@@ -201,6 +227,12 @@ longevity-test: build-test
 	$(TEST_BIN) longevity --expect-timeout -- $(VERBOSE_FLAG) --runtime-seconds=60
 endif
 
+sm-target:
+	rustup target add wasm32-wasip1
+
+cli-backward-compatibility-test:
+	./tests/cli/cli-backward-compatibility.bash
+
 cli-platform-cross-version-test:
 	bats -t ./tests/cli/cli-platform-cross-version.bats
 
@@ -208,7 +240,7 @@ cli-partition-test-multiple-partitions:
 	bats ./tests/cli/partition_test/multiple_partitions.bats
 
 cli-fluvio-smoke:
-	bats $(shell ls -1 ./tests/cli/fluvio_smoke_tests/*.bats | sort -R)
+	bats -x $(shell ls -1 ./tests/cli/fluvio_smoke_tests/*.bats | sort -R)
 	bats ./tests/cli/fluvio_smoke_tests/non-concurrent/local-resume.bats
 	bats ./tests/cli/fluvio_smoke_tests/non-concurrent/cluster-delete.bats
 
@@ -221,7 +253,7 @@ cli-fluvio-mirroring-smoke:
 cli-fluvio-mirroring-smoke-e2e:
 	bats $(shell ls -1 ./tests/cli/mirroring_smoke_tests/e2e/*.bats | sort -R)
 
-cli-smdk-smoke:
+cli-smdk-smoke: sm-target
 	bats $(shell ls -1 ./tests/cli/smdk_smoke_tests/*.bats | sort -R)
 
 cli-cdk-smoke:
@@ -233,22 +265,22 @@ cli-fvm-smoke:
 cli-basic-test:
 	bats ./tests/cli/fluvio_smoke_tests/e2e-basic.bats
 
-cli-smartmodule-all-test:
+cli-smartmodule-all-test: sm-target
 	bats ./tests/cli/fluvio_smoke_tests/e2e-smartmodule-basic.bats
 
-cli-smartmodule-aggregate-test:
+cli-smartmodule-aggregate-test: sm-target
 	bats -f aggregate ./tests/cli/fluvio_smoke_tests/e2e-smartmodule-basic.bats
 
-cli-smartmodule-basic-test:
+cli-smartmodule-basic-test: sm-target
 	bats ./tests/cli/fluvio_smoke_tests/smartmodule-basic.bats
 
-cli-producer-smartmodule-test:
+cli-producer-smartmodule-test: sm-target
 	bats ./tests/cli/fluvio_smoke_tests/producer-smartmodule.bats
 
 stats-test:
 	$(TEST_BIN) stats -- $(VERBOSE_FLAG) --tolerance=5
 
-cli-smdk-basic-test:
+cli-smdk-basic-test: sm-target
 	SMDK_BIN=$(shell readlink -f $(SMDK_BIN)) bats   ./tests/cli/smdk_smoke_tests/smdk-basic.bats
 
 cli-cdk-basic-test:

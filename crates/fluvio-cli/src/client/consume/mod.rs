@@ -23,7 +23,7 @@ mod cmd {
     use std::sync::Arc;
 
     use fluvio_protocol::link::ErrorCode;
-    use futures_util::{Stream, StreamExt};
+    use futures_util::StreamExt;
     use tracing::{debug, trace, instrument};
     use clap::{Parser, ValueEnum};
     use futures::{select, FutureExt};
@@ -321,7 +321,7 @@ mod cmd {
                 builder.offset_flush(DEFAULT_OFFSET_FLUSH_INTERVAL);
             }
 
-            if let Some(ref mirror) = self.mirror {
+            if let Some(mirror) = &self.mirror {
                 builder.mirror(mirror.clone());
             }
 
@@ -368,19 +368,16 @@ mod cmd {
                 builder.disable_continuous(true);
             }
 
-            if let Some(end_offset) = self.end {
-                if let Some(start_offset) = self.start {
-                    if end_offset < start_offset {
-                        eprintln!(
-                            "Argument end-offset must be greater than or equal to specified start offset"
-                        );
-                        return Err(CliError::from(FluvioError::CrossingOffsets(
-                            start_offset,
-                            end_offset,
-                        ))
-                        .into());
-                    }
-                }
+            if let Some(end_offset) = self.end
+                && let Some(start_offset) = self.start
+                && end_offset < start_offset
+            {
+                eprintln!(
+                    "Argument end-offset must be greater than or equal to specified start offset"
+                );
+                return Err(
+                    CliError::from(FluvioError::CrossingOffsets(start_offset, end_offset)).into(),
+                );
             }
 
             if let Some(isolation) = self.isolation {
@@ -391,11 +388,8 @@ mod cmd {
             debug!("consume config: {:#?}", consume_config);
 
             self.print_status();
-            let mut stream = fluvio
-                .consumer_with_config(consume_config)
-                .await?
-                .take_until(stop_signal.recv());
-            self.consume_records_stream(&mut stream, tableformat)
+            let mut stream = fluvio.consumer_with_config(consume_config).await?;
+            self.consume_records_stream(&mut stream, stop_signal, tableformat)
                 .await?;
 
             if !self.disable_continuous {
@@ -403,19 +397,23 @@ mod cmd {
             }
 
             if self.consumer.is_some() {
-                stream.get_mut().offset_commit()?;
-                stream.get_mut().offset_flush().await?;
+                stream.offset_commit().await?;
+                stream.offset_flush().await?;
             }
 
             Ok(())
         }
 
         /// Consume records as a stream, waiting for new records to arrive
-        async fn consume_records_stream(
+        async fn consume_records_stream<S>(
             &self,
-            stream: &mut (impl Stream<Item = Result<Record, ErrorCode>> + Unpin),
+            stream: &mut S,
+            stop_signal: async_channel::Receiver<()>,
             tableformat: Option<TableFormatSpec>,
-        ) -> Result<()> {
+        ) -> Result<()>
+        where
+            S: ConsumerStream + Unpin + Send,
+        {
             let maybe_potential_end_offset: Option<u32> = self.end;
 
             let templates = match self.format.as_deref() {
@@ -490,6 +488,10 @@ mod cmd {
                                         continue;
                                     }
                                     */
+                                    Err(ErrorCode::MaxRetryReached) => {
+                                        eprintln!("Max limit of retry connection reached");
+                                        break;
+                                    }
                                     Err(other) => return Err(other.into()),
                                 };
 
@@ -502,14 +504,17 @@ mod cmd {
                                     &pb,
                                 );
 
-                                if let Some(potential_offset) = maybe_potential_end_offset {
-                                    if record.offset >= potential_offset as i64 {
+                                if let Some(potential_offset) = maybe_potential_end_offset
+                                    && record.offset >= potential_offset as i64 {
                                         eprintln!("End-offset has been reached; exiting");
                                         break;
                                     }
-                                }
                             },
                             None => break,
+                        },
+                        _ = stop_signal.recv().fuse() => {
+                            debug!("Received stop signal, exiting consume loop");
+                            break;
                         },
                         maybe_event = user_input_reader.next().fuse() => {
                             match maybe_event {
@@ -533,43 +538,53 @@ mod cmd {
             } else {
                 let pb = ProgressRenderer::default();
                 // We do not support `--output=full_table` when we don't have a TTY (i.e., CI environment)
-                while let Some(result) = stream.next().await {
-                    let result: std::result::Result<Record, _> = result;
-                    let record = match result {
-                        Ok(record) => record,
-                        /*
-                        Err(FluvioError::AdminApi(ApiError::Code(code, _))) => {
-                            eprintln!("{}", code.to_sentence());
-                            continue;
-                        }
-                        */
-                        Err(other) => return Err(other.into()),
-                    };
+                loop {
+                    select! {
+                        stream_next = stream.next().fuse() => match stream_next {
+                            Some(result) => {
+                                let result: std::result::Result<Record, _> = result;
+                                let record = match result {
+                                    Ok(record) => record,
+                                    /*
+                                    Err(FluvioError::AdminApi(ApiError::Code(code, _))) => {
+                                        eprintln!("{}", code.to_sentence());
+                                        continue;
+                                    }
+                                    */
+                                    Err(other) => return Err(other.into()),
+                                };
 
-                    self.print_record(
-                        templates.as_ref(),
-                        &record,
-                        &mut header_print,
-                        &mut None,
-                        &mut None,
-                        &pb,
-                    );
+                                self.print_record(
+                                    templates.as_ref(),
+                                    &record,
+                                    &mut header_print,
+                                    &mut None,
+                                    &mut None,
+                                    &pb,
+                                );
 
-                    if let Some(potential_offset) = maybe_potential_end_offset {
-                        if record.offset >= potential_offset as i64 {
-                            eprintln!("End-offset has been reached; exiting");
+                                if let Some(potential_offset) = maybe_potential_end_offset
+                                    && record.offset >= potential_offset as i64 {
+                                        eprintln!("End-offset has been reached; exiting");
+                                        break;
+                                    }
+                            },
+                            None => break,
+                        },
+                        _ = stop_signal.recv().fuse() => {
+                            debug!("Received stop signal, exiting consume loop");
                             break;
-                        }
+                        },
                     }
                 }
             }
 
-            if let Some(ConsumeOutputType::full_table) = &self.output {
-                if let Some(mut terminal_stdout) = maybe_terminal_stdout {
-                    disable_raw_mode()?;
-                    execute!(terminal_stdout.backend_mut(), LeaveAlternateScreen,)?;
-                    terminal_stdout.show_cursor()?;
-                }
+            if let Some(ConsumeOutputType::full_table) = &self.output
+                && let Some(mut terminal_stdout) = maybe_terminal_stdout
+            {
+                disable_raw_mode()?;
+                execute!(terminal_stdout.backend_mut(), LeaveAlternateScreen,)?;
+                terminal_stdout.show_cursor()?;
             }
 
             debug!("fetch loop exited");
@@ -624,7 +639,7 @@ mod cmd {
                     value
                 }
                 (Some(ConsumeOutputType::full_table), None) => {
-                    if let Some(ref mut table) = table_model {
+                    if let Some(table) = table_model {
                         format_fancy_table_record(record.value(), table)
                     } else {
                         unreachable!()
@@ -677,10 +692,10 @@ mod cmd {
                     // (Some(_), None) only if JSON cannot be printed, so skip.
                     _ => debug!("Skipping record that cannot be formatted"),
                 }
-            } else if let Some(term) = terminal {
-                if let Some(table) = table_model {
-                    table.render(term);
-                }
+            } else if let Some(term) = terminal
+                && let Some(table) = table_model
+            {
+                table.render(term);
             }
         }
 
@@ -837,9 +852,9 @@ mod cmd {
             );
             opt.end = Some(2);
             assert_eq!(
-            opt.format_status_string(),
-            "Consuming records from 'TOPIC_NAME' starting 1 from the beginning of log until offset 2 (inclusive)",
-        );
+                opt.format_status_string(),
+                "Consuming records from 'TOPIC_NAME' starting 1 from the beginning of log until offset 2 (inclusive)",
+            );
 
             // --start
             let mut opt = get_opt();
@@ -850,9 +865,9 @@ mod cmd {
             );
             opt.end = Some(2);
             assert_eq!(
-            opt.format_status_string(),
-            "Consuming records from 'TOPIC_NAME' starting at offset 1 until offset 2 (inclusive)",
-        );
+                opt.format_status_string(),
+                "Consuming records from 'TOPIC_NAME' starting at offset 1 until offset 2 (inclusive)",
+            );
 
             // --tail
             let mut opt = get_opt();
@@ -863,9 +878,9 @@ mod cmd {
             );
             opt.end = Some(2);
             assert_eq!(
-            opt.format_status_string(),
-            "Consuming records from 'TOPIC_NAME' starting 1 from the end of log until offset 2 (inclusive)",
-        );
+                opt.format_status_string(),
+                "Consuming records from 'TOPIC_NAME' starting 1 from the end of log until offset 2 (inclusive)",
+            );
 
             // base case
             let mut opt = get_opt();

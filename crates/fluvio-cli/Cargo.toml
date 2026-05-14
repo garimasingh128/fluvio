@@ -1,13 +1,13 @@
 [package]
 name = "fluvio-cli"
-version = "0.0.0"
-edition = "2021"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
 description = "Fluvio CLI"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
 default-run = "fluvio"
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [lib]
 name = "fluvio_cli"
@@ -72,15 +72,15 @@ which = { workspace = true }
 k8-config = { workspace = true, optional = true }
 k8-client = { workspace = true, optional = true }
 k8-types = { workspace = true , features = ["core"] }
-fluvio-cluster = { path = "../fluvio-cluster", default-features = false, features = ["cli"], optional = true }
+fluvio-cluster = { workspace = true, features = ["cli"], optional = true }
 
 fluvio = { workspace = true }
 fluvio-auth = { workspace = true }
+fluvio-benchmark = { workspace = true }
 fluvio-command = { workspace = true  }
 fluvio-package-index = { workspace = true }
 fluvio-extension-common = { workspace = true,  features = ["target", "installation"] }
 fluvio-channel = { workspace = true }
-fluvio-hub-util = { workspace = true, features = ["connector-cmds"] }
 fluvio-cli-common = { workspace = true, features = ["serde", "version-cmd"] }
 fluvio-smartengine = { workspace = true,  features = ["transformation"]}
 fluvio-protocol = { workspace = true, features=["record","api"] }

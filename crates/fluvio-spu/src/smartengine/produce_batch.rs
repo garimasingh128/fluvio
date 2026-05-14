@@ -1,4 +1,4 @@
-use std::io::{Error as IoError, ErrorKind};
+use std::io::Error as IoError;
 
 use fluvio_protocol::record::{Batch, RawRecords, Offset};
 use fluvio_compression::{Compression, CompressionError};
@@ -17,7 +17,7 @@ pub struct ProduceBatchIterator<'a> {
     len: usize,
 }
 
-impl<'a> SmartModuleInputBatch for ProduceBatch<'a> {
+impl SmartModuleInputBatch for ProduceBatch<'_> {
     fn records(&self) -> &Vec<u8> {
         &self.records
     }
@@ -65,22 +65,16 @@ impl<'a> Iterator for ProduceBatchIterator<'a> {
         let compression = match batch.get_compression() {
             Ok(compression) => compression,
             Err(err) => {
-                return Some(Err(IoError::new(
-                    ErrorKind::Other,
-                    format!("unknown compression value for batch {err}"),
-                )))
+                return Some(Err(IoError::other(format!(
+                    "unknown compression value for batch {err}"
+                ))));
             }
         };
 
         let records = match compression.uncompress(raw_bytes) {
             Ok(Some(records)) => records,
             Ok(None) => raw_bytes.to_vec(),
-            Err(err) => {
-                return Some(Err(IoError::new(
-                    ErrorKind::Other,
-                    format!("uncompress error {err}"),
-                )))
-            }
+            Err(err) => return Some(Err(IoError::other(format!("uncompress error {err}")))),
         };
 
         let produce_batch = ProduceBatch { batch, records };

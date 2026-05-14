@@ -29,7 +29,7 @@ use k8_client::SharedK8Client;
 use k8_client::load_and_share;
 use k8_types::K8Obj;
 use k8_types::app::deployment::DeploymentSpec;
-use fluvio::{Fluvio, FluvioConfig};
+use fluvio::{Fluvio, FluvioClusterConfig};
 use fluvio::metadata::spg::SpuGroupSpec;
 use fluvio::metadata::spu::SpuSpec;
 use fluvio::config::{TlsPolicy, TlsConfig, TlsPaths, ConfigFile};
@@ -56,9 +56,8 @@ use crate::progress::InstallProgressMessage;
 use super::constants::*;
 use super::common::try_connect_to_sc;
 
-const DEFAULT_REGISTRY: &str = "infinyon";
-const DEFAULT_GROUP_NAME: &str = "main";
-const DEFAULT_SPU_REPLICAS: u16 = 1;
+pub const DEFAULT_SPU_GROUP_NAME: &str = "main";
+const DEFAULT_REGISTRY: &str = "ghcr.io/fluvio-community";
 const DEFAULT_SERVICE_TYPE: &str = "NodePort";
 
 const FLUVIO_SC_SERVICE: &str = "fluvio-sc-public";
@@ -108,7 +107,7 @@ pub struct ClusterConfig {
     /// # Example
     ///
     /// Suppose you would like to install version `0.6.0` of Fluvio from
-    /// Docker Hub, where the image is tagged as `infinyon/fluvio:0.6.0`.
+    /// a container registry, where the image is tagged as `fluvio-community/fluvio:0.6.0`.
     /// You can do that like this:
     ///
     /// ```
@@ -122,11 +121,11 @@ pub struct ClusterConfig {
     /// ```
     #[builder(setter(into, strip_option), default)]
     image_tag: Option<String>,
-    /// Sets the docker image registry to use to download Fluvio images.
+    /// Sets the container image registry prefix used to download Fluvio images.
     ///
-    /// This defaults to `infinyon` to pull from Infinyon's official Docker Hub
-    /// registry. This can be used to specify a private registry or a local
-    /// registry as a source of Fluvio images.
+    /// This defaults to `ghcr.io/fluvio-community` to pull from the GitHub
+    /// Container Registry. This can be used to specify a private registry or a
+    /// local registry as a source of Fluvio images.
     ///
     /// # Example
     ///
@@ -137,7 +136,7 @@ pub struct ClusterConfig {
     /// docker run -d -p 5000:5000 --restart=always --name registry registry:2
     /// ```
     ///
-    /// Suppose you tagged your image as `infinyon/fluvio:0.1.0` and pushed it
+    /// Suppose you tagged your image as `fluvio-community/fluvio:0.1.0` and pushed it
     /// to your `localhost:5000` registry. Your image is now located at
     /// `localhost:5000/infinyon`. You can specify that to the installer like so:
     ///
@@ -165,37 +164,6 @@ pub struct ClusterConfig {
     /// The location to search for the Helm charts to install
     #[builder(setter(into, strip_option), default)]
     chart_location: Option<UserChartLocation>,
-    /// Sets a custom SPU group name. The default is `main`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use fluvio_cluster::{ClusterConfig, ClusterConfigBuilder, ClusterError};
-    /// # fn example(builder: &mut ClusterConfigBuilder) -> anyhow::Result<()> {
-    /// let config = builder
-    ///     .group_name("orange")
-    ///     .build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[builder(setter(into), default = "DEFAULT_GROUP_NAME.to_string()")]
-    group_name: String,
-
-    /// How many SPUs to provision for this Fluvio cluster. Defaults to 1
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use fluvio_cluster::{ClusterConfig, ClusterConfigBuilder, ClusterError};
-    /// # fn example(builder: &mut ClusterConfigBuilder) -> anyhow::Result<()> {
-    /// let config = builder
-    ///     .spu_replicas(2)
-    ///     .build()?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[builder(default = "DEFAULT_SPU_REPLICAS")]
-    spu_replicas: u16,
     /// Sets the [`RUST_LOG`] environment variable for the installation.
     ///
     /// # Example
@@ -309,14 +277,25 @@ pub struct ClusterConfig {
     #[builder(setter(into), default)]
     proxy_addr: Option<String>,
 
-    #[builder(setter(into), default)]
-    spu_config: SpuConfig,
-
     #[builder(setter(into), default = "TLS_SERVER_SECRET_NAME.to_string()")]
     tls_server_secret_name: String,
 
     #[builder(setter(into), default = "TLS_CLIENT_SECRET_NAME.to_string()")]
     tls_client_secret_name: String,
+
+    #[builder(setter(into), default)]
+    default_spu_group: Option<DefaultSpuGroup>,
+}
+
+/// Controls SPG creation during installation
+#[derive(Debug, Clone)]
+pub struct DefaultSpuGroup {
+    /// The name of the SPU group to create.
+    pub group_name: String,
+    /// The number of SPUs to create in the group
+    pub spu_replicas: u16,
+    /// The configuration for the SPUs
+    pub spu_config: SpuConfig,
 }
 
 impl ClusterConfig {
@@ -525,11 +504,21 @@ impl ClusterConfigBuilder {
     where
         F: Fn(&mut Self) -> &mut Self,
     {
-        if cond {
-            f(self)
-        } else {
-            self
-        }
+        if cond { f(self) } else { self }
+    }
+
+    pub fn with_default_spu_group(
+        &mut self,
+        group_name: impl Into<String>,
+        spu_replicas: u16,
+        spu_config: SpuConfig,
+    ) -> &mut Self {
+        self.default_spu_group(DefaultSpuGroup {
+            group_name: group_name.into(),
+            spu_replicas,
+            spu_config,
+        });
+        self
     }
 }
 
@@ -610,7 +599,9 @@ impl ClusterInstaller {
 
         // HACK. set FLV_DISPATCHER if not set
         if env::var(DISPATCHER_WAIT).is_err() {
-            env::set_var(DISPATCHER_WAIT, "300");
+            unsafe {
+                env::set_var(DISPATCHER_WAIT, "300");
+            }
         }
 
         let mut checker = ClusterChecker::empty().with_k8_checks();
@@ -682,7 +673,7 @@ impl ClusterInstaller {
             (external_host_and_port.clone(), None)
         };
 
-        let cluster_config = FluvioConfig::new(install_host_and_port.clone())
+        let cluster_config = FluvioClusterConfig::new(install_host_and_port.clone())
             .with_tls(self.config.client_tls_policy.clone());
         pb.set_message("🔎 Discovering Fluvio SC");
         let fluvio =
@@ -691,11 +682,11 @@ impl ClusterInstaller {
                 None => return Err(K8InstallError::SCServiceTimeout.into()),
             };
         pb.println(format!("✅ Connected to SC: {install_host_and_port}"));
-        pb.finish_and_clear();
-        drop(pb);
 
-        // Create a managed SPU cluster
-        self.create_managed_spu_group(&fluvio).await?;
+        // Create a managed SPU cluster if configured
+        if let Some(default_spu_group) = &self.config.default_spu_group {
+            Self::create_managed_spu_group(default_spu_group, &fluvio, &pb).await?;
+        }
 
         if let Some(mut pf_process) = pf_process {
             match pf_process.kill() {
@@ -704,8 +695,9 @@ impl ClusterInstaller {
             };
         }
 
-        self.pb_factory
-            .println(InstallProgressMessage::Success.msg());
+        pb.println(InstallProgressMessage::Success.msg());
+
+        pb.finish_and_clear();
 
         Ok(StartStatus {
             address: external_host,
@@ -968,13 +960,12 @@ impl ClusterInstaller {
                                 K8Watch::DELETED(_) => None
                             };
 
-                            if let Some(service) = service_value {
+                            if let Some(service) = service_value
 
-                                if service.metadata.name == FLUVIO_SC_SERVICE {
+                                && service.metadata.name == FLUVIO_SC_SERVICE {
                                     debug!(service = ?service,"found sc service");
                                     return Ok(service)
                                 }
-                            }
                         }
                     } else {
                         debug!("service stream ended");
@@ -1015,18 +1006,16 @@ impl ClusterInstaller {
                                 K8Watch::DELETED(_) => None
                             };
 
-                            if let Some(deployment) = deployment_value {
+                            if let Some(deployment) = deployment_value
 
-                                if deployment.metadata.name == FLUVIO_SC_DEPLOYMENT {
+                                && deployment.metadata.name == FLUVIO_SC_DEPLOYMENT {
                                     debug!(deployment = ?deployment,"found sc deployment");
-                                    if let Some(available_replicas) = deployment.status.available_replicas {
-                                        if available_replicas > 0 {
+                                    if let Some(available_replicas) = deployment.status.available_replicas
+                                        && available_replicas > 0 {
                                             debug!(deployment = ?deployment,"deployment has atleast 1 replica available");
                                             return Ok(deployment)
                                         }
-                                    }
                                 }
-                            }
                         }
                     } else {
                         debug!("deployment stream ended");
@@ -1139,9 +1128,13 @@ impl ClusterInstaller {
     }
 
     /// Wait until all SPUs are ready and have ingress
-    #[instrument(skip(self, admin))]
-    async fn wait_for_spu(&self, admin: &FluvioAdmin, pb: &ProgressRenderer) -> Result<bool> {
-        let expected_spu = self.config.spu_replicas as usize;
+    #[instrument(skip(admin, pb))]
+    async fn wait_for_spu(
+        default_spu_group: &DefaultSpuGroup,
+        admin: &FluvioAdmin,
+        pb: &ProgressRenderer,
+    ) -> Result<bool> {
+        let expected_spu = default_spu_group.spu_replicas as usize;
         let timeout_duration = Duration::from_secs(*MAX_PROVISION_TIME_SEC as u64);
         let time = SystemTime::now();
         pb.set_message(format!(
@@ -1170,7 +1163,7 @@ impl ClusterInstaller {
                 elapsed.as_secs()
             ));
 
-            if self.config.spu_replicas as usize == ready_spu {
+            if default_spu_group.spu_replicas as usize == ready_spu {
                 return Ok(true);
             } else {
                 debug!(
@@ -1319,23 +1312,26 @@ impl ClusterInstaller {
     }
 
     /// Provisions a SPU group for the given cluster according to internal config
-    #[instrument(skip(self, fluvio))]
-    async fn create_managed_spu_group(&self, fluvio: &Fluvio) -> Result<()> {
-        let pb = self.pb_factory.create()?;
-        let spg_name = self.config.group_name.clone();
+    #[instrument(skip(fluvio, pb))]
+    async fn create_managed_spu_group(
+        default_spu_group: &DefaultSpuGroup,
+        fluvio: &Fluvio,
+        pb: &ProgressRenderer,
+    ) -> Result<()> {
+        let spg_name = default_spu_group.group_name.clone();
         pb.set_message(format!("📝 Checking for existing SPU Group: {spg_name}"));
         let admin = fluvio.admin().await;
         let lists = admin.all::<SpuGroupSpec>().await?;
         if lists.is_empty() {
             pb.set_message(format!(
                 "🤖 Creating SPU Group: {} with replicas: {}",
-                spg_name, self.config.spu_replicas
+                spg_name, default_spu_group.spu_replicas
             ));
 
             let spu_spec = SpuGroupSpec {
-                replicas: self.config.spu_replicas,
+                replicas: default_spu_group.spu_replicas,
                 min_id: 0,
-                spu_config: self.config.spu_config.clone(),
+                spu_config: default_spu_group.spu_config.clone(),
             };
 
             admin
@@ -1357,11 +1353,11 @@ impl ClusterInstaller {
         }
 
         // Wait for the SPU cluster to spin up
-        self.wait_for_spu(&admin, &pb).await?;
+        Self::wait_for_spu(default_spu_group, &admin, pb).await?;
 
         pb.println(format!(
             "✅ SPU group {} launched with {} replicas",
-            spg_name, self.config.spu_replicas
+            spg_name, default_spu_group.spu_replicas
         ));
 
         pb.finish_and_clear();

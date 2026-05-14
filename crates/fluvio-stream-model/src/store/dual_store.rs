@@ -74,7 +74,7 @@ where
 
     /// Read guard
     #[inline(always)]
-    pub async fn read<'a>(
+    pub async fn read(
         &'_ self,
     ) -> RwLockReadGuard<'_, DualEpochMap<S::IndexKey, MetadataStoreObject<S, C>>> {
         self.store.read().await
@@ -82,7 +82,7 @@ where
 
     /// write guard, this is private, use sync API to make changes
     #[inline(always)]
-    async fn write<'a>(
+    async fn write(
         &'_ self,
     ) -> RwLockWriteGuard<'_, DualEpochMap<S::IndexKey, MetadataStoreObject<S, C>>> {
         self.store.write().await
@@ -521,16 +521,14 @@ mod listener {
             drop(read_guard);
             trace!(
                 "finding last status change: {}, from: {}",
-                self.last_change,
-                changes.epoch
+                self.last_change, changes.epoch
             );
 
             let current_epoch = self.event_publisher().current_change();
             if changes.epoch > current_epoch {
                 trace!(
                     "latest epoch: {} > spec epoch: {}",
-                    changes.epoch,
-                    current_epoch
+                    changes.epoch, current_epoch
                 );
             }
             self.set_last_change(changes.epoch);
@@ -611,10 +609,12 @@ mod test {
         assert_eq!(topic_store.epoch().await, 1);
 
         // applying same data should result in zero changes in the store
-        assert!(topic_store
-            .apply_changes(vec![LSUpdate::Mod(initial_topic.clone())])
-            .await
-            .is_none());
+        assert!(
+            topic_store
+                .apply_changes(vec![LSUpdate::Mod(initial_topic.clone())])
+                .await
+                .is_none()
+        );
         assert_eq!(topic_store.epoch().await, 1);
 
         // update spec should result in increase epoch
@@ -667,8 +667,7 @@ mod test_notify {
     use tokio::select;
     use tracing::debug;
 
-    use fluvio_future::task::spawn;
-    use fluvio_future::task::JoinHandle;
+    use fluvio_future::task::{spawn, spawn_task, Task};
     use fluvio_future::timer::sleep;
 
     use crate::core::{Spec, MetadataItem};
@@ -838,13 +837,13 @@ mod test_notify {
     fn start_batch_of_test_listeners(
         store: Arc<LocalStore<TestSpec, TestMeta>>,
         has_been_updated: Arc<AtomicBool>,
-    ) -> Vec<JoinHandle<()>> {
+    ) -> Vec<Task<()>> {
         (0..10u32)
             // let jh: Vec<()> = (0..10u32)
             .map(|_| {
                 let store = store.clone();
 
-                spawn(listener_thread(store, has_been_updated.clone()))
+                spawn_task(listener_thread(store, has_been_updated.clone()))
             })
             .collect()
     }

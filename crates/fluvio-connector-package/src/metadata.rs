@@ -39,6 +39,9 @@ pub enum ConnectorVisibility {
     Public,
 }
 
+/// Direction of the connector.
+/// Currently only pure source OR pure dest is supported.
+/// Other combinations are considered invalid.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Direction {
     #[serde(default, skip_serializing_if = "is_false")]
@@ -112,8 +115,11 @@ impl Default for Direction {
 
 impl Display for Direction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = if self.source { "source" } else { "dest" };
-        write!(f, "{str}")
+        match (self.source, self.dest) {
+            (true, false) => write!(f, "source"),
+            (false, true) => write!(f, "dest"),
+            _ => write!(f, "invalid"),
+        }
     }
 }
 
@@ -453,6 +459,42 @@ mod tests {
     }
 
     #[test]
+    fn test_direction_display() {
+        assert_eq!(
+            Direction {
+                source: true,
+                dest: false
+            }
+            .to_string(),
+            "source"
+        );
+        assert_eq!(
+            Direction {
+                source: false,
+                dest: true
+            }
+            .to_string(),
+            "dest"
+        );
+        assert_eq!(
+            Direction {
+                source: false,
+                dest: false
+            }
+            .to_string(),
+            "invalid"
+        );
+        assert_eq!(
+            Direction {
+                source: true,
+                dest: true
+            }
+            .to_string(),
+            "invalid"
+        );
+    }
+
+    #[test]
     fn test_validate_deployment() {
         //given
         let config = ConnectorConfig::V0_1_0(ConnectorConfigV1 {
@@ -473,7 +515,10 @@ mod tests {
         validate_deployment(&deployment3, &config).unwrap();
 
         //then
-        assert_eq!(res.unwrap_err().to_string(), "deployment image in metadata: 'infinyon/fluvio-connect-http_sink:latest' mismatches image in config: 'infinyon/fluvio-connect-http_source:latest'");
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "deployment image in metadata: 'infinyon/fluvio-connect-http_sink:latest' mismatches image in config: 'infinyon/fluvio-connect-http_source:latest'"
+        );
     }
 
     #[test]

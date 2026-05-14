@@ -1,12 +1,12 @@
 [package]
 name = "fluvio-test-derive"
-version = "0.0.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-edition = "2021"
 description = "Fluvio Test Derive Macro"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 
 [lib]
@@ -18,7 +18,7 @@ quote = { workspace = true }
 proc-macro2 = { workspace = true }
 serde_json = { workspace = true }
 inflections = "1.1"
-fluvio-test-util = { path = "../fluvio-test-util" }
+fluvio-test-util = { workspace = true }
 rand = { workspace = true }
 
 

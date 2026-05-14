@@ -12,7 +12,7 @@ impl ConnectorDirection {
     pub(crate) fn from_ast(args: &Punctuated<Meta, Token![,]>) -> Result<Self> {
         args.iter()
             .find_map(|item| match item {
-                Meta::Path(p) =>  p.segments.iter().last().and_then(|p_it| {
+                Meta::Path(p) =>  p.segments.iter().next_back().and_then(|p_it| {
                     match p_it.ident.to_string().as_str() {
                         "source" => Some(Self::Source),
                         "sink" => Some(Self::Sink),
@@ -108,10 +108,10 @@ fn config_name(args: &Punctuated<Meta, Token![,]>) -> Result<String> {
     for arg in args {
         match arg {
             Meta::NameValue(name_value) if name_value.path.is_ident("name") => {
-                if let Expr::Lit(lit_expr) = &name_value.value {
-                    if let Lit::Str(lit_str) = &lit_expr.lit {
-                        return Ok(lit_str.value());
-                    }
+                if let Expr::Lit(lit_expr) = &name_value.value
+                    && let Lit::Str(lit_str) = &lit_expr.lit
+                {
+                    return Ok(lit_str.value());
                 }
             }
             _ => {}

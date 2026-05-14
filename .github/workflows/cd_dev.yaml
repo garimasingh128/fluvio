@@ -74,7 +74,7 @@ jobs:
       TOPIC: foobar
     steps:
       - name: Checkout ${{ needs.setup.outputs.pub_sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup.outputs.pub_sha }}
       - name: Set up K3d for Ubuntu
@@ -85,7 +85,7 @@ jobs:
         if: ${{ matrix.cluster_type == 'k8' }}
         run: ./k8-util/cluster/reset-k3d.sh
       - name: Setup Fluvio
-        uses: infinyon/fluvio/.github/actions/setup-fluvio@master
+        uses: fluvio-community/fluvio/.github/actions/setup-fluvio@master
         with:
           version: latest
       - name: Install Local Fluvio cluster
@@ -115,7 +115,7 @@ jobs:
         timeout-minutes: 5
         run: fluvio cluster diagnostics
       - name: Upload diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         timeout-minutes: 5
         if: ${{ !success() }}
         with:
@@ -146,7 +146,7 @@ jobs:
       FLV_SOCKET_WAIT: 600
     steps:
       - name: Checkout ${{ needs.setup.outputs.pub_sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup.outputs.pub_sha }}
       - name: Setup K3d
@@ -165,7 +165,7 @@ jobs:
         timeout-minutes: 5
         run: ~/.fluvio/bin/fluvio cluster diagnostics
       - name: Upload diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         timeout-minutes: 5
         if: ${{ !success() }}
         with:
@@ -192,7 +192,7 @@ jobs:
         version: [latest]
     steps:
       - name: Checkout ${{ needs.setup.outputs.pub_sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup.outputs.pub_sha }}
       - name: Set the expected fluvio version
@@ -206,7 +206,7 @@ jobs:
 
       - name: Curl Install - latest
         run: |
-          curl -fsS https://hub.infinyon.cloud/install/install.sh | \
+          curl -fsS https://raw.githubusercontent.com/fluvio-community/fluvio/master/install.sh | \
             FLUVIO_VERSION=${{ matrix.version }} bash | \
             tee /tmp/installer.version
 
@@ -227,8 +227,6 @@ jobs:
     needs: setup
     #if: false
     runs-on: ${{ matrix.os }}
-    env:
-      FLUVIO_BIN: ~/.fluvio/bin/fluvio
     strategy:
       fail-fast: false
       matrix:
@@ -237,36 +235,16 @@ jobs:
         cli_version: [stable, latest]
     steps:
       - name: Checkout ${{ needs.setup.outputs.pub_sha }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup.outputs.pub_sha }}
       - name: Setup BATS
         uses: mig4/setup-bats@v1
         with:
-          bats-version: 1.2.1
-      - name: Setup bin path
-        run:  echo "~/.fluvio/bin" >> $GITHUB_PATH
-      - name: Setup Fluvio
-        uses: infinyon/fluvio/.github/actions/setup-fluvio@master
-        with:
-          version: ${{ matrix.cluster_version }}
-      - name: Start Fluvio Cluster
-        timeout-minutes: 10
-        run: fluvio cluster start --local
+          bats-version: 1.11.0
       - name: CLI ${{ matrix.cli_version }} x Cluster ${{ matrix.cluster_version }}
         run: |
-          make FLUVIO_BIN=~/.fluvio/bin/fluvio SKIP_SETUP=true CLI_VERSION=${{ matrix.cli_version }} CLUSTER_VERSION=${{ matrix.cluster_version }} cli-platform-cross-version-test
-      - name: Run diagnostics
-        if: ${{ !success() }}
-        timeout-minutes: 5
-        run: fluvio cluster diagnostics
-      - name: Upload diagnostics
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: ${{ !success() }}
-        with:
-          name: cli-platform-cross-version-test
-          path: diagnostics*.gz
+          make CLI_VERSION=${{ matrix.cli_version }} CLUSTER_VERSION=${{ matrix.cluster_version }} cli-platform-cross-version-test
       - name: Slack Notification
         uses: 8398a7/action-slack@v3
         if: ${{ !success() }}

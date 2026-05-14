@@ -1,11 +1,11 @@
 [package]
 name = "fluvio-connector-package"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-repository = "https://github.com/infinyon/fluvio"
 description = "Fluvio Connector Package"
+version = "0.0.0"
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [features]
 default = ["toml"]
@@ -14,22 +14,30 @@ default = ["toml"]
 anyhow = { workspace = true }
 bytesize = { workspace = true }
 humantime-serde = { workspace = true }
-minijinja = { version = "1.0", default-features = false, features = ["custom_syntax", "fuel"] }
+minijinja = { workspace = true, features = [
+    "custom_syntax",
+    "fuel",
+    "serde",
+] }
 openapiv3 = { version = "2.0", default-features = false }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"], default-features = false }
 serde_yaml = { workspace = true }
-toml = { workspace = true , optional = true, features = ["display", "parse", "preserve_order"] }
+toml = { workspace = true, optional = true, features = [
+    "display",
+    "parse",
+    "preserve_order",
+] }
 tracing = { workspace = true }
 
 # fluvio dependencies
-fluvio-controlplane-metadata = { path = "../fluvio-controlplane-metadata/", default-features = false, features = [
+fluvio-controlplane-metadata = { workspace = true, default-features = false, features = [
     "use_serde",
 ] }
-fluvio-smartengine = { path = "../fluvio-smartengine", default-features = false, features = [
+fluvio-smartengine = { workspace = true, default-features = false, features = [
     "transformation",
 ] }
-fluvio-compression = { path = "../fluvio-compression" }
-fluvio-types = { path = "../fluvio-types" }
+fluvio-types = { workspace = true }
 bytesize-serde = "0.2.1"
 
 [dev-dependencies]

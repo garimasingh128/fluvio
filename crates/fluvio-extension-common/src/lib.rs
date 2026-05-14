@@ -83,13 +83,13 @@ impl Terminal for PrintTerminal {
 
 #[cfg(feature = "target")]
 pub mod target {
-    use std::io::{ErrorKind, Error as IoError};
+    use std::io::Error as IoError;
     use std::convert::TryInto;
     use clap::Parser;
 
     use anyhow::Result;
 
-    use fluvio::FluvioConfig;
+    use fluvio::FluvioClusterConfig;
     use fluvio::FluvioError;
     use fluvio::Fluvio;
     use fluvio::config::ConfigFile;
@@ -135,7 +135,7 @@ pub mod target {
         }
 
         /// try to create sc config
-        pub fn load(self) -> Result<FluvioConfig> {
+        pub fn load(self) -> Result<FluvioClusterConfig> {
             let tls = self.tls.try_into()?;
 
             use fluvio::config::TlsPolicy::*;
@@ -154,19 +154,12 @@ pub mod target {
                         .into());
                     }
 
-                    let config_file = ConfigFile::load(None)?;
-                    let cluster = config_file
-                        .config()
-                        // NOTE: This will not fallback to current cluster like it did before
-                        // Current cluster will be used when no profile is given.
-                        .cluster_with_profile(&profile)
-                        .ok_or_else(|| {
-                            IoError::new(ErrorKind::Other, "Cluster not found for profile")
-                        })?;
+                    let cluster = FluvioClusterConfig::load_with_profile(&profile)?
+                        .ok_or_else(|| IoError::other("Cluster not found for profile"))?;
                     Ok(cluster.clone())
                 }
                 (None, Some(cluster)) => {
-                    let cluster = FluvioConfig::new(cluster).with_tls(tls);
+                    let cluster = FluvioClusterConfig::new(cluster).with_tls(tls);
                     Ok(cluster)
                 }
                 (None, None) => {

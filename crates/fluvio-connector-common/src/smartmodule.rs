@@ -1,4 +1,4 @@
-use fluvio::{FluvioConfig, SmartModuleInvocation, SmartModuleKind, SmartModuleExtraParams};
+use fluvio::{FluvioClusterConfig, SmartModuleInvocation, SmartModuleKind, SmartModuleExtraParams};
 
 use crate::{config::ConnectorConfig, Result};
 
@@ -14,7 +14,7 @@ pub async fn smartmodule_chain_from_config(
     }
 
     let api_client =
-        SmartModuleApiClient::connect_with_config(FluvioConfig::load()?.try_into()?).await?;
+        SmartModuleApiClient::connect_with_config(FluvioClusterConfig::load()?.try_into()?).await?;
     let mut builder = fluvio::SmartModuleChainBuilder::default();
 
     for step in transforms {
@@ -25,6 +25,7 @@ pub async fn smartmodule_chain_from_config(
             .wasm
             .as_raw_wasm()?;
 
+        // this ::from adds the smartmodule_name to the config
         let config = fluvio::SmartModuleConfig::from(step.clone());
         builder.add_smart_module(config, wasm);
     }
@@ -52,6 +53,7 @@ pub fn smartmodule_vec_from_config(config: &ConnectorConfig) -> Option<Vec<Smart
                         .collect::<std::collections::BTreeMap<String, String>>(),
                     s.lookback.map(Into::into),
                 ),
+                name: Some(s.uses.clone()),
             })
             .collect(),
     )

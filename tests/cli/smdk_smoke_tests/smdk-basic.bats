@@ -43,7 +43,7 @@ smdk_via_stdin() {
 }
 
 ### Using crates.io dependency for `fluvio-smartmodule`
-
+# bats test_tags=tag:clean
 @test "Clean" {
     LABEL=clean
     SMDK_SM_TYPE=filter
@@ -51,7 +51,7 @@ smdk_via_stdin() {
     SM_CRATE_PATH_FLAG=
     SM_PACKAGE_NAME=$LABEL-$SMDK_SM_TYPE-$PROJECT_NAME_PREFIX
     SMDK_SM_PUBLIC=false
-    
+
     cd $TEST_DIR
     sed -i -e $'/members/a\\\n    "'$SM_PACKAGE_NAME'",' Cargo.toml
 
@@ -65,105 +65,24 @@ smdk_via_stdin() {
         --sm-public $SMDK_SM_PUBLIC \
         --silent \
         $SM_PACKAGE_NAME
-    assert_success    
+    assert_success
 
-    
+
     # Build
     cd $SM_PACKAGE_NAME
     run $SMDK_BIN build
     refute_output --partial "could not compile"
-    
+
 
     # Verify if target exists in the parent folder
     [ -d "../target" ]
-    
+
     # Clean
     run $SMDK_BIN clean
     assert_success
 
     # Verify if target was removed from the parent folder
-    [ ! -d "../target" ]    
-}
-
-@test "Package" {
-    LABEL=package
-    SMDK_SM_TYPE=filter
-    PARAMS_FLAG=--no-params
-    SM_CRATE_PATH_FLAG=
-    SM_PACKAGE_NAME=$LABEL-$SMDK_SM_TYPE-$PROJECT_NAME_PREFIX
-    SMDK_SM_PUBLIC=false
-
-    # Add SM to workspace
-    cd $TEST_DIR
-    sed -i -e $'/members/a\\\n    "'$SM_PACKAGE_NAME'",' Cargo.toml
-
-    # Generate
-    run $SMDK_BIN generate \
-        $PARAMS_FLAG \
-        $SMDK_TEMPLATE_PATH_FLAG \
-        $SM_CRATE_PATH_FLAG \
-        $TESTING_GROUP_NAME_FLAG \
-        --sm-type $SMDK_SM_TYPE \
-        --sm-public $SMDK_SM_PUBLIC \
-        --silent \
-        $SM_PACKAGE_NAME
-    assert_success
-
-    # Build
-    cd $SM_PACKAGE_NAME
-    run $SMDK_BIN build
-    refute_output --partial "could not compile"
-
-    # Package without existing package-meta
-    run $SMDK_BIN publish --pack
-    assert_success
-
-    # Package with package-meta created before
-    run $SMDK_BIN publish --pack
-    assert_success
-}
-
-@test "Package with README" {
-    LABEL=package
-    SMDK_SM_TYPE=filter
-    PARAMS_FLAG=--no-params
-    SM_CRATE_PATH_FLAG=
-    SM_PACKAGE_NAME="$LABEL-$SMDK_SM_TYPE-$PROJECT_NAME_PREFIX-readme-tests"
-    SMDK_SM_PUBLIC=false
-
-    # Add SM to workspace
-    cd $TEST_DIR
-    sed -i -e $'/members/a\\\n    "'$SM_PACKAGE_NAME'",' Cargo.toml
-
-    # Generate
-    run $SMDK_BIN generate \
-        $PARAMS_FLAG \
-        $SM_CRATE_PATH_FLAG \
-        $TESTING_GROUP_NAME_FLAG \
-        --sm-type $SMDK_SM_TYPE \
-        --sm-public $SMDK_SM_PUBLIC \
-        --silent \
-        $SM_PACKAGE_NAME
-    assert_success
-
-    # Build
-    cd $SM_PACKAGE_NAME
-    run $SMDK_BIN build
-    refute_output --partial "could not compile"
-
-    # Remove README from Template on Purpose
-    rm "$TEST_DIR/$SM_PACKAGE_NAME/README.md"
-
-    # Validates SmartModule Exists
-    run $SMDK_BIN publish --pack
-    assert_output --partial 'Error: README file not found at "./README.md"'
-    assert_failure
-
-    # Packages with specified README
-    echo "# My SmartModule" > "$TEST_DIR/$SM_PACKAGE_NAME/README.md"
-    run $SMDK_BIN publish --pack
-    assert_success
-
+    [ ! -d "../target" ]
 }
 
 @test "Generate and test filter - (stable fluvio-smartmodule / no params)" {
@@ -988,7 +907,7 @@ smdk_via_stdin() {
     assert_output --partial "[null]"
     assert_success
 
-    run $SMDK_BIN test --text '444' --lookback-last '1' --record '222' --record '333' --key-value my-key
+    run $SMDK_BIN test --text '444' --lookback-last '1' --record '222' --record '333' --key-value --key my-key
     assert_output --partial "[my-key]"
     assert_success
 }
@@ -1069,4 +988,23 @@ smdk_via_stdin() {
     assert_output --partial "\"Banana\"_$DATE_NOW_YEAR-$DATE_NOW_MONTH-$DATE_NOW_DAY"
     assert_output --partial "\"Cranberry\"_$DATE_NOW_YEAR-$DATE_NOW_MONTH-$DATE_NOW_DAY"
     assert_success
+}
+
+@test "Test key value on filter-odd-key" {
+    # Test with smartmodule example with Array Map with Timestamp
+    cd "$(pwd)/smartmodule/examples/filter_odd_key/"
+
+    # Build
+    run $SMDK_BIN build
+    refute_output --partial "could not compile"
+
+    # Test, only odd keys should be returned
+    run $SMDK_BIN test --verbose --text "abc" --key "1" --key-value
+    refute_output --partial "abc"
+    run $SMDK_BIN test --verbose --text "abc" --key "2" --key-value
+    assert_output --partial "abc"
+    run $SMDK_BIN test --verbose --text "abc" --key "3" --key-value
+    refute_output --partial "abc"
+    run $SMDK_BIN test --verbose --text "abc" --key "4" --key-value
+    assert_output --partial "abc"
 }

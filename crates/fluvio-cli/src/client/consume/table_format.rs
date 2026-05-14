@@ -149,10 +149,10 @@ impl TableModel {
             let mut primary_keys = Vec::new();
 
             for c in &self.columns {
-                if let Some(is_primary_key) = c.primary_key {
-                    if is_primary_key {
-                        primary_keys.push(c.key_path.clone());
-                    }
+                if let Some(is_primary_key) = c.primary_key
+                    && is_primary_key
+                {
+                    primary_keys.push(c.key_path.clone());
                 }
             }
 
@@ -227,11 +227,7 @@ impl TableModel {
                     Some(i) => {
                         let up_five: isize = (i as isize) - 5;
 
-                        if up_five >= 0 {
-                            up_five as usize
-                        } else {
-                            0
-                        }
+                        if up_five >= 0 { up_five as usize } else { 0 }
                     }
                     None => 0,
                 };

@@ -20,8 +20,15 @@ setup_file() {
     TOPIC_NAME_REPLICA=$(random_string)
     export TOPIC_NAME_REPLICA
 
-    DEDUP_FILTER_NAME="dedup-filter"
+    TOPIC_NAME_SYSTEM=$(random_string)
+    export TOPIC_NAME_SYSTEM
+
+    TOPIC_NAME_DEDUP=$(random_string)
+    export TOPIC_NAME_DEDUP
+
+    DEDUP_FILTER_NAME="dedup-bloom-filter"
     export DEDUP_FILTER_NAME
+
 
     cat <<EOF >$TOPIC_CONFIG_PATH
 version: 0.1.0
@@ -46,7 +53,7 @@ deduplication:
       uses: $DEDUP_FILTER_NAME
 EOF
 
-    run timeout 15s "$FLUVIO_BIN" sm create --wasm-file smartmodule/examples/target/wasm32-wasi/release-lto/fluvio_smartmodule_filter.wasm "$DEDUP_FILTER_NAME"
+    run timeout 15s "$FLUVIO_BIN" sm create --wasm-file smartmodule/examples/target/wasm32-wasip1/release-lto/fluvio_smartmodule_filter.wasm "$DEDUP_FILTER_NAME"
     assert_success
 }
 
@@ -218,4 +225,23 @@ EOF
     assert_output --partial "Deduplication Filter:$DEDUP_FILTER_NAME"
     assert_output --partial "Deduplication Count Bound:10"
     assert_output --partial "Deduplication Age Bound:1"
+}
+
+# Create a system topic
+@test "Create a system topic" {
+    if [ "$FLUVIO_CLI_RELEASE_CHANNEL" == "stable" ]; then
+        skip "don't run on fluvio cli stable version"
+    fi
+    if [ "$FLUVIO_CLUSTER_RELEASE_CHANNEL" == "stable" ]; then
+        skip "don't run on cluster stable version"
+    fi
+    debug_msg "Topic name: $TOPIC_NAME_SYSTEM"
+    run timeout 15s "$FLUVIO_BIN" topic create "$TOPIC_NAME_SYSTEM" --system
+    assert_output --partial "topic "\"$TOPIC_NAME_SYSTEM"\" created"
+    assert_success
+
+    # Check if the topic is a system topic
+    run bash -c 'timeout 15s "$FLUVIO_BIN" partition list --system | grep "$TOPIC_NAME_SYSTEM"'
+    assert_line --partial --index 0 "$TOPIC_NAME_SYSTEM"
+    assert_success
 }

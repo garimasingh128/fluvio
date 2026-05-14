@@ -6,6 +6,7 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::de::{Visitor, SeqAccess};
 use serde::ser::{SerializeMap, SerializeSeq};
 use tracing::debug;
@@ -15,8 +16,8 @@ pub use bytesize::ByteSize;
 
 pub use fluvio_controlplane_metadata::topic::config as topic_config;
 pub use fluvio_smartengine::transformation::TransformationStep;
-pub use fluvio_compression::Compression;
 pub use fluvio_types::PartitionId;
+pub use fluvio_types::compression::Compression;
 
 use crate::metadata::Direction;
 
@@ -291,10 +292,11 @@ pub struct ConsumerParameters {
     pub offset: Option<ConsumerOffsetConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ProducerParameters {
     #[serde(with = "humantime_serde")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option::<String>")]
     pub linger: Option<Duration>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,9 +309,20 @@ pub struct ProducerParameters {
         skip_serializing_if = "Option::is_none",
         default
     )]
+    #[schemars(skip)]
     pub batch_size: Option<ByteSize>,
+
+    #[serde(
+        rename = "max-request-size",
+        alias = "max_request_size",
+        with = "bytesize_serde",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    #[schemars(skip)]
+    pub max_request_size: Option<ByteSize>,
 }
-#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash, JsonSchema)]
 pub struct SecretConfig {
     /// The name of the secret. It can only contain alphanumeric ASCII characters and underscores. It cannot start with a number.
     name: SecretName,
@@ -325,7 +338,8 @@ impl SecretConfig {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(with = "String")]
 pub struct SecretName {
     inner: String,
 }
@@ -395,17 +409,12 @@ impl Serialize for SecretName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ConsumerPartitionConfig {
+    #[default]
     All,
     One(PartitionId),
     Many(Vec<PartitionId>),
-}
-
-impl Default for ConsumerPartitionConfig {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 struct PartitionConfigVisitor;
@@ -612,7 +621,7 @@ impl ConnectorConfig {
         Ok(())
     }
 
-    pub fn meta(&self) -> MetaConfig {
+    pub fn meta(&self) -> MetaConfig<'_> {
         match self {
             Self::V0_0_0(inner) => MetaConfig::V0_1_0(&inner.meta),
             Self::V0_1_0(inner) => MetaConfig::V0_1_0(&inner.meta),
@@ -698,6 +707,7 @@ mod tests {
                     linger: Some(Duration::from_millis(1)),
                     compression: Some(Compression::Gzip),
                     batch_size: Some(ByteSize::mb(44)),
+                    max_request_size: None,
                 }),
                 consumer: Some(ConsumerParameters {
                     partition: ConsumerPartitionConfig::One(10),
@@ -776,6 +786,7 @@ mod tests {
                     linger: Some(Duration::from_millis(1)),
                     compression: Some(Compression::Gzip),
                     batch_size: Some(ByteSize::mb(44)),
+                    max_request_size: None,
                 }),
                 consumer: Some(ConsumerParameters {
                     partition: ConsumerPartitionConfig::One(10),
@@ -987,6 +998,7 @@ mod tests {
                     linger: None,
                     compression: None,
                     batch_size: Some(ByteSize::b(1600)),
+                    max_request_size: None,
                 }),
                 consumer: Some(ConsumerParameters {
                     max_bytes: Some(ByteSize::b(1400)),
@@ -1016,7 +1028,7 @@ mod tests {
           version: 0.1.0
           name: my-test-mqtt
           type: mqtt-source
-          topic: 
+          topic:
             meta:
               name: my-mqtt
         "#;
@@ -1181,9 +1193,10 @@ mod tests {
 
         let err = connector_spec.unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("mapping values are not allowed in this context at line 16 column 17"));
+        assert!(
+            err.to_string()
+                .contains("mapping values are not allowed in this context at line 16 column 17")
+        );
     }
 
     #[test]
@@ -1210,6 +1223,7 @@ mod tests {
                     linger: None,
                     compression: None,
                     batch_size: Some(ByteSize::b(1600)),
+                    max_request_size: None,
                 }),
                 consumer: Some(ConsumerParameters {
                     max_bytes: Some(ByteSize::b(1400)),
@@ -1240,7 +1254,7 @@ mod tests {
 
         let with_multiple_partitions: ConsumerParameters = serde_yaml::from_str(
             r#"
-            partition: 
+            partition:
                 - 120
                 - 230
         "#,

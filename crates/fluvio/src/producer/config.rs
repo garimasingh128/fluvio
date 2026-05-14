@@ -1,5 +1,6 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use derive_builder::Builder;
@@ -9,14 +10,19 @@ use fluvio_spu_schema::Isolation;
 use fluvio_spu_schema::server::smartmodule::SmartModuleInvocation;
 
 use fluvio_compression::Compression;
+use fluvio_types::PartitionId;
 use serde::{Serialize, Deserialize};
 
 use crate::producer::partitioning::{Partitioner, SiphashRoundRobinPartitioner};
 
-const DEFAULT_LINGER_MS: u64 = 100;
+use super::accumulator::SharedProducerCallback;
+use super::partitioning::SpecificPartitioner;
+
+const DEFAULT_LINGER_MS: u64 = 0;
 const DEFAULT_TIMEOUT_MS: u64 = 1500;
 const DEFAULT_BATCH_SIZE_BYTES: usize = 16_384;
 const DEFAULT_BATCH_QUEUE_SIZE: usize = 100;
+const DEFAULT_MAX_REQUEST_SIZE: usize = 1_048_576;
 
 const DEFAULT_RETRIES_TIMEOUT: Duration = Duration::from_secs(300);
 const DEFAULT_INITIAL_DELAY: Duration = Duration::from_millis(20);
@@ -27,6 +33,10 @@ fn default_batch_size() -> usize {
     DEFAULT_BATCH_SIZE_BYTES
 }
 
+fn default_max_request_size() -> usize {
+    DEFAULT_MAX_REQUEST_SIZE
+}
+
 fn default_batch_queue_size() -> usize {
     DEFAULT_BATCH_QUEUE_SIZE
 }
@@ -35,8 +45,8 @@ fn default_linger_duration() -> Duration {
     Duration::from_millis(DEFAULT_LINGER_MS)
 }
 
-fn default_partitioner() -> Box<dyn Partitioner + Send + Sync> {
-    Box::new(SiphashRoundRobinPartitioner::new())
+fn default_partitioner() -> Arc<dyn Partitioner + Send + Sync> {
+    Arc::new(SiphashRoundRobinPartitioner::new())
 }
 
 fn default_timeout() -> Duration {
@@ -62,12 +72,14 @@ impl fmt::Debug for Box<dyn Partitioner + Send + Sync> {
 /// Create this struct with [`TopicProducerConfigBuilder`].
 ///
 /// Create a producer with a custom config with [`crate::Fluvio::topic_producer_with_config()`].
-#[derive(Debug, Builder)]
-#[builder(pattern = "owned")]
+#[derive(Builder, Clone)]
 pub struct TopicProducerConfig {
     /// Maximum amount of bytes accumulated by the records before sending the batch.
     #[builder(default = "default_batch_size()")]
     pub(crate) batch_size: usize,
+    /// Maximum amount of bytes that the server is allowed to process in a single request.
+    #[builder(default = "default_max_request_size()")]
+    pub(crate) max_request_size: usize,
     /// Maximum amount of batches waiting in the queue before sending to the SPU.
     #[builder(default = "default_batch_queue_size()")]
     pub(crate) batch_queue_size: usize,
@@ -76,7 +88,7 @@ pub struct TopicProducerConfig {
     pub(crate) linger: Duration,
     /// Partitioner assigns the partition to each record that needs to be send
     #[builder(default = "default_partitioner()")]
-    pub(crate) partitioner: Box<dyn Partitioner + Send + Sync>,
+    pub(crate) partitioner: Arc<dyn Partitioner + Send + Sync>,
 
     /// Compression algorithm used by Fluvio producer to compress data.
     /// If there is a topic level compression and it is not compatible with this setting, the producer
@@ -105,8 +117,19 @@ pub struct TopicProducerConfig {
     #[builder(default = "default_delivery()")]
     pub(crate) delivery_semantic: DeliverySemantic,
 
+    /// SmartModules that will be invoked by each record produced.
     #[builder(default)]
     pub(crate) smartmodules: Vec<SmartModuleInvocation>,
+
+    /// Callback that will be called after the record is sent to the server.
+    #[builder(setter(into, strip_option), default)]
+    pub(crate) callback: Option<SharedProducerCallback>,
+}
+
+impl TopicProducerConfigBuilder {
+    pub fn set_specific_partitioner(&mut self, partition_id: PartitionId) -> &mut Self {
+        self.partitioner(Arc::new(SpecificPartitioner::new(partition_id)))
+    }
 }
 
 impl TopicProducerConfig {
@@ -116,6 +139,10 @@ impl TopicProducerConfig {
 
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    pub fn max_request_size(&self) -> usize {
+        self.max_request_size
     }
 
     pub fn batch_queue_size(&self) -> usize {
@@ -148,6 +175,7 @@ impl Default for TopicProducerConfig {
         Self {
             linger: default_linger_duration(),
             batch_size: default_batch_size(),
+            max_request_size: default_max_request_size(),
             batch_queue_size: default_batch_queue_size(),
             partitioner: default_partitioner(),
             compression: None,
@@ -155,6 +183,7 @@ impl Default for TopicProducerConfig {
             isolation: default_isolation(),
             delivery_semantic: default_delivery(),
             smartmodules: vec![],
+            callback: None,
         }
     }
 }
@@ -206,9 +235,15 @@ impl FromStr for DeliverySemantic {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "at_most_once" | "at-most-once" | "AtMostOnce" | "atMostOnce" | "atmostonce" => Ok(DeliverySemantic::AtMostOnce),
-            "at_least_once" | "at-least-once" | "AtLeastOnce" | "atLeastOnce" | "atleastonce" => Ok(DeliverySemantic::default()),
-            _ => Err(format!("unrecognized delivery semantic: {s}. Supported: at_most_once (AtMostOnce), at_least_once (AtLeastOnce)")),
+            "at_most_once" | "at-most-once" | "AtMostOnce" | "atMostOnce" | "atmostonce" => {
+                Ok(DeliverySemantic::AtMostOnce)
+            }
+            "at_least_once" | "at-least-once" | "AtLeastOnce" | "atLeastOnce" | "atleastonce" => {
+                Ok(DeliverySemantic::default())
+            }
+            _ => Err(format!(
+                "unrecognized delivery semantic: {s}. Supported: at_most_once (AtMostOnce), at_least_once (AtLeastOnce)"
+            )),
         }
     }
 }

@@ -534,6 +534,7 @@ async fn test_produce_basic_with_smartmodule_with_lookback() {
         wasm: SmartModuleInvocationWasm::Predefined(FLUVIO_WASM_FILTER_WITH_LOOKBACK.to_owned()),
         kind: SmartModuleKind::Filter,
         params: Default::default(),
+        name: Some(FLUVIO_WASM_FILTER_WITH_LOOKBACK.to_owned()),
     };
     smartmodule.params.set_lookback(Some(Lookback::last(1)));
     let mut smartmodules = vec![smartmodule];
@@ -776,7 +777,9 @@ async fn test_produce_basic_with_smartmodule_with_lookback() {
         assert_eq!(produce_response.responses[0].partitions.len(), 1);
         assert_eq!(
             read_records(&replica).await,
-            vec!["1", "2", "3", "4", "5", "1", "2", "1", "2", "3", "4", "1", "2"]
+            vec![
+                "1", "2", "3", "4", "5", "1", "2", "1", "2", "3", "4", "1", "2"
+            ]
         );
     }
 

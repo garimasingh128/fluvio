@@ -1,11 +1,7 @@
 #![allow(clippy::assign_op_pattern)]
 
-//!
-//! # Partition Spec
-//!
-//!
 use fluvio_types::SpuId;
-use fluvio_protocol::{Encoder, Decoder};
+use fluvio_protocol::{link::ErrorCode, Decoder, Encoder};
 
 use crate::topic::{CleanupPolicy, CompressionAlgorithm, Deduplication, TopicSpec, TopicStorageConfig};
 
@@ -82,7 +78,24 @@ impl PartitionSpec {
 
     pub fn mirror_string(&self) -> String {
         if let Some(mirror) = &self.mirror {
-            mirror.external_cluster()
+            let external = mirror.external_cluster();
+            match mirror {
+                PartitionMirrorConfig::Remote(remote) => {
+                    if remote.target {
+                        format!("{external}(from-home)")
+                    } else {
+                        format!("{external}(to-home)")
+                    }
+                }
+
+                PartitionMirrorConfig::Home(home) => {
+                    if home.source {
+                        format!("{external}(to-remote)")
+                    } else {
+                        format!("{external}(from-remote)")
+                    }
+                }
+            }
         } else {
             "".to_owned()
         }
@@ -109,6 +122,7 @@ pub struct PartitionConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "camelCase")
 )]
 pub enum PartitionMirrorConfig {
@@ -149,16 +163,37 @@ impl PartitionMirrorConfig {
         }
     }
 
+    #[deprecated(since = "0.29.1")]
     pub fn is_home_mirror(&self) -> bool {
         matches!(self, Self::Home(_))
+    }
+
+    /// check whether this mirror should accept traffic
+    pub fn accept_traffic(&self) -> Option<ErrorCode> {
+        match self {
+            Self::Remote(r) => {
+                if r.target {
+                    Some(ErrorCode::MirrorProduceFromRemoteNotAllowed)
+                } else {
+                    None
+                }
+            }
+            Self::Home(h) => {
+                if h.source {
+                    None
+                } else {
+                    Some(ErrorCode::MirrorProduceFromHome)
+                }
+            }
+        }
     }
 }
 
 impl std::fmt::Display for PartitionMirrorConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PartitionMirrorConfig::Remote(cfg) => write!(f, "{}", cfg),
-            PartitionMirrorConfig::Home(cfg) => write!(f, "{}", cfg),
+            PartitionMirrorConfig::Remote(cfg) => write!(f, "{cfg}"),
+            PartitionMirrorConfig::Home(cfg) => write!(f, "{cfg}"),
         }
     }
 }
@@ -167,11 +202,19 @@ impl std::fmt::Display for PartitionMirrorConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "camelCase")
 )]
 pub struct HomePartitionConfig {
     pub remote_cluster: String,
     pub remote_replica: String,
+    // if this is set, home will be mirror instead of
+    #[cfg_attr(
+        feature = "use_serde",
+        serde(default, skip_serializing_if = "crate::is_false")
+    )]
+    #[fluvio(min_version = 18)]
+    pub source: bool,
 }
 
 impl std::fmt::Display for HomePartitionConfig {
@@ -184,6 +227,7 @@ impl std::fmt::Display for HomePartitionConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "camelCase")
 )]
 pub struct RemotePartitionConfig {
@@ -192,6 +236,12 @@ pub struct RemotePartitionConfig {
     #[cfg_attr(feature = "use_serde", serde(default))]
     pub home_spu_id: SpuId,
     pub home_spu_endpoint: String,
+    #[cfg_attr(
+        feature = "use_serde",
+        serde(default, skip_serializing_if = "crate::is_false")
+    )]
+    #[fluvio(min_version = 18)]
+    pub target: bool,
 }
 
 impl std::fmt::Display for RemotePartitionConfig {

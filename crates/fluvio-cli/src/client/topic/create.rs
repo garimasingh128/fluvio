@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use fluvio_sc_schema::smartmodule::SmartModuleSpec;
 use tracing::debug;
 use clap::Parser;
 use humantime::parse_duration;
@@ -24,11 +25,17 @@ use fluvio_sc_schema::shared::validate_resource_name;
 use fluvio_sc_schema::mirror::MirrorSpec;
 use fluvio_sc_schema::topic::HomeMirrorConfig;
 use fluvio_sc_schema::topic::MirrorConfig;
+use fluvio_sc_schema::topic::Bounds;
+use fluvio_sc_schema::topic::Deduplication;
+use fluvio_sc_schema::topic::Filter;
+use fluvio_sc_schema::topic::Transform;
 
 use fluvio::Fluvio;
 use fluvio::FluvioAdmin;
 use fluvio::metadata::topic::TopicSpec;
 use crate::CliError;
+
+const DEFAULT_DEDUP_FILTER: &str = "fluvio/dedup-bloom-filter@0.1.0";
 
 #[derive(Debug, Parser)]
 pub struct CreateTopicOpt {
@@ -130,6 +137,10 @@ pub struct CreateTopicOpt {
     /// or inside the topic configuration file in YAML format.
     #[arg(short, long, value_name = "PATH", conflicts_with = "config-arg")]
     config: Option<PathBuf>,
+
+    /// signify that this topic can be mirror from home to edge
+    #[arg(long)]
+    home_to_remote: bool,
 }
 
 impl CreateTopicOpt {
@@ -163,7 +174,10 @@ impl CreateTopicOpt {
                 &topic_name,
             )?)
         } else if let Some(mirror_assign_file) = &self.mirror_apply {
-            let config = MirrorConfig::read_from_json_file(mirror_assign_file, &topic_name)?;
+            let mut config = MirrorConfig::read_from_json_file(mirror_assign_file, &topic_name)?;
+
+            config.set_home_to_remote(self.home_to_remote)?;
+
             let targets = match config {
                 MirrorConfig::Home(ref c) => c
                     .partitions()
@@ -173,7 +187,7 @@ impl CreateTopicOpt {
                 MirrorConfig::Remote(_) => {
                     return Err(
                         CliError::InvalidArg("Invalid mirror configuration".to_string()).into(),
-                    )
+                    );
                 }
             };
 
@@ -191,15 +205,16 @@ impl CreateTopicOpt {
 
             if !not_registered_mirrors.is_empty() {
                 return Err(CliError::InvalidArg(format!(
-                    "Remote clusters not registered: {:?}",
-                    not_registered_mirrors
+                    "Remote clusters not registered: {not_registered_mirrors:?}"
                 ))
                 .into());
             }
 
             ReplicaSpec::Mirror(config)
         } else if self.mirror {
-            let mirror_map = MirrorConfig::Home(HomeMirrorConfig::from(vec![]));
+            let mut home_mirror = HomeMirrorConfig::from(vec![]);
+            home_mirror.source = self.home_to_remote;
+            let mirror_map = MirrorConfig::Home(home_mirror);
             ReplicaSpec::Mirror(mirror_map)
         } else {
             ReplicaSpec::Computed(TopicReplicaParam {
@@ -219,6 +234,27 @@ impl CreateTopicOpt {
         if let Some(compression_type) = self.setting.compression_type {
             topic_spec.set_compression_type(compression_type);
         }
+
+        if self.setting.dedup {
+            let sm = admin
+                .list::<SmartModuleSpec, _>(vec![DEFAULT_DEDUP_FILTER.to_string()])
+                .await?
+                .into_iter()
+                .next();
+
+            if sm.is_none() {
+                return Err(CliError::InvalidArg(format!(
+                    "Deduplication SmartModule filter '{DEFAULT_DEDUP_FILTER}' not found. Please build and add to the cluster the smartmodule from https://github.com/infinyon/dedup-bloom-filter."
+                ))
+                .into());
+            }
+
+            let deduplication =
+                create_deduplication(self.setting.dedup_count, Some(self.setting.dedup_age));
+            topic_spec.set_deduplication(Some(deduplication));
+        }
+
+        topic_spec.set_system(self.setting.system);
 
         if self.setting.segment_size.is_some() || self.setting.max_partition_size.is_some() {
             let mut storage = TopicStorageConfig::default();
@@ -243,8 +279,23 @@ fn validate(name: &str, _spec: &TopicSpec) -> Result<()> {
         return Err(CliError::InvalidArg("Topic name is required".to_string()).into());
     }
     validate_resource_name(name)
-        .map_err(|err| CliError::InvalidArg(format!("Invalid Topic name {}. {err}", name)))?;
+        .map_err(|err| CliError::InvalidArg(format!("Invalid Topic name {name}. {err}")))?;
     Ok(())
+}
+
+fn create_deduplication(dedup_count: u64, dedup_age: Option<Duration>) -> Deduplication {
+    Deduplication {
+        bounds: Bounds {
+            count: dedup_count,
+            age: dedup_age,
+        },
+        filter: Filter {
+            transform: Transform {
+                uses: DEFAULT_DEDUP_FILTER.to_string(),
+                with: Default::default(),
+            },
+        },
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -268,6 +319,24 @@ pub struct TopicConfigOpt {
     /// Ex: `2048`, '2 Ki', '10 MiB', `1 GB`
     #[arg(long, value_name = "bytes")]
     max_partition_size: Option<bytesize::ByteSize>,
+
+    /// Deduplicate records in the topic
+    #[arg(long)]
+    dedup: bool,
+
+    /// Number of records to keep in deduplication filter
+    #[arg(long, value_name = "integer", requires = "dedup", default_value = "5")]
+    dedup_count: u64,
+
+    /// Age of records to keep in deduplication filter
+    /// Ex: '1h', '2d 10s', '7 days' (default)
+    #[arg(long, value_name = "time", value_parser=parse_duration, requires = "dedup", default_value = "5s")]
+    dedup_age: Duration,
+
+    /// Flag to create a system topic
+    /// System topics are for internal operations
+    #[arg(long, short = 's', hide = true)]
+    system: bool,
 }
 
 /// module to load partitions maps from file
@@ -342,14 +411,16 @@ mod load {
                 partitions[0],
                 HomePartitionConfig {
                     remote_cluster: "boat1".to_string(),
-                    remote_replica: "boats-0".to_string()
+                    remote_replica: "boats-0".to_string(),
+                    ..Default::default()
                 }
             );
             assert_eq!(
                 partitions[1],
                 HomePartitionConfig {
                     remote_cluster: "boat2".to_string(),
-                    remote_replica: "boats-0".to_string()
+                    remote_replica: "boats-0".to_string(),
+                    ..Default::default()
                 }
             );
         }

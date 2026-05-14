@@ -33,6 +33,7 @@ mod context {
         wait_time
     });
 
+    #[allow(dead_code)]
     /// context that always updates
     #[derive(Debug, Default, Clone, Eq, PartialEq)]
     pub struct AlwaysNewContext {}
@@ -166,6 +167,8 @@ mod context {
 
     #[cfg(feature = "unstable")]
     mod unstable {
+        use std::pin::Pin;
+
         use super::*;
         use crate::metadata::store::MetadataChanges;
         use futures_util::Stream;
@@ -178,11 +181,12 @@ mod context {
         {
             pub(crate) fn watch(
                 &self,
-            ) -> impl Stream<Item = MetadataChanges<S, LocalMetadataItem>> {
+            ) -> Pin<Box<dyn Stream<Item = MetadataChanges<S, LocalMetadataItem>> + Send + 'static>>
+            {
                 let mut listener = self.store.change_listener();
                 let (sender, receiver) = async_channel::unbounded();
 
-                fluvio_future::task::spawn_local(async move {
+                fluvio_future::task::spawn(async move {
                     loop {
                         listener.listen().await;
                         let changes = listener.sync_changes().await;
@@ -193,7 +197,7 @@ mod context {
                     }
                 });
 
-                receiver
+                Box::pin(receiver)
             }
         }
     }

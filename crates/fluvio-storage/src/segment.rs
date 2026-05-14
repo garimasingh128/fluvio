@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, trace, instrument, info, error};
-use anyhow::{Result};
+use anyhow::Result;
 
 use fluvio_future::fs::remove_file;
 use fluvio_future::file_slice::AsyncFileSlice;
@@ -20,9 +20,9 @@ use crate::index::Index;
 use crate::records::FileRecords;
 use crate::mut_records::MutFileRecords;
 use crate::records::FileRecordsSlice;
-use crate::config::{SharedReplicaConfig};
+use crate::config::SharedReplicaConfig;
 use crate::StorageError;
-use crate::batch::{FileBatchStream};
+use crate::batch::FileBatchStream;
 use crate::index::OffsetPosition;
 use crate::validator::LogValidationError;
 
@@ -303,11 +303,12 @@ impl Segment<LogIndex, FileRecordsSlice> {
 impl Segment<MutLogIndex, MutFileRecords> {
     // create segment on base directory
 
+    #[instrument(skip(option))]
     pub async fn create(
         base_offset: Offset,
         option: Arc<SharedReplicaConfig>,
     ) -> Result<MutableSegment, StorageError> {
-        debug!(base_offset, "creating new active segment");
+        info!(base_offset, "creating new active segment");
         let msg_log = MutFileRecords::create(base_offset, option.clone()).await?;
 
         let index = MutLogIndex::create(base_offset, option.clone()).await?;
@@ -385,8 +386,8 @@ impl Segment<MutLogIndex, MutFileRecords> {
         self.index.shrink().await
     }
 
-    // perform any action during roll over
-    pub async fn roll_over(&mut self) -> Result<(), IoError> {
+    // close this segment as writeable
+    pub async fn close(&mut self) -> Result<(), IoError> {
         self.index.shrink().await
     }
 
@@ -472,7 +473,7 @@ mod tests {
     use fluvio_protocol::record::{Batch, MemoryRecords};
     use fluvio_protocol::record::Size;
     use fluvio_protocol::Decoder;
-    use fluvio_protocol::fixture::create_batch_with_producer;
+    use fluvio_protocol::fixture::{create_batch_with_producer, TEST_RECORD};
     use fluvio_protocol::fixture::create_batch;
     use fluvio_protocol::fixture::read_bytes_from_file;
 
@@ -512,7 +513,7 @@ mod tests {
 
         // batch of 1
         active_segment
-            .append_batch(&mut create_batch_with_producer(100, 1))
+            .append_batch(&mut create_batch_with_producer(100, 1, TEST_RECORD))
             .await
             .expect("write");
         assert_eq!(active_segment.get_end_offset(), 21);
@@ -532,11 +533,13 @@ mod tests {
         assert_eq!(seg1_metadata.len(), 1000);
 
         // this should return none since we are trying find offset before start offset
-        assert!((active_segment
-            .find_offset_position(10)
-            .await
-            .expect("offset"))
-        .is_none());
+        assert!(
+            (active_segment
+                .find_offset_position(10)
+                .await
+                .expect("offset"))
+            .is_none()
+        );
         let offset_position =
             (active_segment.find_offset_position(20).await.expect("find")).expect("offset exists");
         assert_eq!(offset_position.batch.get_base_offset(), 20);
@@ -559,7 +562,7 @@ mod tests {
             .expect("segment");
 
         active_segment
-            .append_batch(&mut create_batch_with_producer(100, 4))
+            .append_batch(&mut create_batch_with_producer(100, 4, TEST_RECORD))
             .await
             .expect("batch");
 

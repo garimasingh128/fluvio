@@ -81,7 +81,7 @@ impl LogValidator {
             Ok(batch_stream) => batch_stream,
             Err(err) => match err.kind() {
                 ErrorKind::UnexpectedEof => {
-                    return Err(anyhow!("empty file with base offset: {}", val.base_offset))
+                    return Err(anyhow!("empty file with base offset: {}", val.base_offset));
                 }
                 _ => return Err(err.into()),
             },
@@ -260,12 +260,11 @@ impl LogValidator {
     }
 }
 
-/// validate the file and find last offset
-/// if file is not valid then return error
-
 #[cfg(test)]
 #[cfg(feature = "fixture")]
 mod tests {
+    //! validate the file and find last offset
+    //! if file is not valid then return error
 
     use std::env::temp_dir;
 

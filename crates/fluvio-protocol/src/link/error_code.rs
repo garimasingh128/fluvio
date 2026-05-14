@@ -5,7 +5,7 @@
 //!
 use flv_util::string_helper::upper_cammel_case_to_sentence;
 
-use crate::{Encoder, Decoder, api::RequestKind};
+use crate::{api::RequestKind, record::ReplicaKey, Decoder, Encoder};
 
 // -----------------------------------
 // Error Definition & Implementation
@@ -57,6 +57,12 @@ pub enum ErrorCode {
     #[fluvio(tag = 71)]
     #[error("Offset {offset} is evicted. The next available is {next_available}")]
     OffsetEvicted { offset: i64, next_available: i64 },
+    #[fluvio(tag = 72)]
+    #[error("Partition storage is full")]
+    PartitionFull { replica_key: ReplicaKey },
+    #[fluvio(tag = 73)]
+    #[error("Partition is short-circuited")]
+    PartitionShortCircuited,
 
     // Spu errors
     #[fluvio(tag = 1000)]
@@ -122,6 +128,9 @@ pub enum ErrorCode {
     #[fluvio(tag = 3004)]
     #[error("the offset management is disabled for the stream")]
     OffsetManagementDisabled,
+    #[fluvio(tag = 3005)]
+    #[error("max retry attempts reached")]
+    MaxRetryReached,
 
     // Managed Connector Errors
     #[fluvio(tag = 5000)]
@@ -147,11 +156,13 @@ pub enum ErrorCode {
     #[error("SmartModule is invalid: {error}")]
     SmartModuleInvalid { error: String, name: Option<String> },
     #[fluvio(tag = 6003)]
-    #[error("SmartModule is not a valid '{kind}' SmartModule due to {error}. Are you missing a #[smartmodule({kind})] attribute?")]
+    #[error(
+        "SmartModule is not a valid '{kind}' SmartModule due to {error}. Are you missing a #[smartmodule({kind})] attribute?"
+    )]
     SmartModuleInvalidExports { error: String, kind: String },
     #[fluvio(tag = 6004)]
     #[error("SmartModule transform error {0}")]
-    SmartModuleRuntimeError(super::smartmodule::SmartModuleTransformRuntimeError),
+    SmartModuleRuntimeError(Box<super::smartmodule::SmartModuleTransformRuntimeError>),
     #[fluvio(tag = 6005)]
     #[error("Error initializing {0} SmartModule Chain")]
     SmartModuleChainInitError(String),
@@ -220,6 +231,9 @@ pub enum ErrorCode {
     #[fluvio(tag = 11005)]
     #[error("the mirror is invalid")]
     MirrorInvalidType,
+    #[fluvio(tag = 11006)]
+    #[error("produce from remote target is not allowed")]
+    MirrorProduceFromRemoteNotAllowed,
 
     // Specs
     #[fluvio(tag = 12001)]

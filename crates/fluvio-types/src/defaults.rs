@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 pub const PRODUCT_NAME: &str = "fluvio";
 
 // Fluvio
@@ -49,11 +51,19 @@ pub const STORAGE_RETENTION_SECONDS: u32 = 7 * 24 * 3600;
 pub const STORAGE_RETENTION_SECONDS_MIN: u32 = 10; // crd
 pub const STORAGE_FLUSH_WRITE_COUNT: u32 = 1;
 pub const STORAGE_FLUSH_IDLE_MSEC: u32 = 0;
-pub const STORAGE_MAX_BATCH_SIZE: u32 = 33_554_432;
+pub const STORAGE_MAX_BATCH_SIZE: u32 = 2_097_152;
+pub const STORAGE_MAX_REQUEST_SIZE: u32 = 33_554_432;
 
 pub const SPU_SMARTENGINE_STORE_MAX_BYTES: usize = 1_073_741_824; //1Gb
+pub const SPU_PEER_MAX_BYTES: u32 = 10_485_760; //10mb
 
 pub const CONSUMER_STORAGE_TOPIC: &str = "consumer-offset";
+pub const CONSUMER_REPLICA_KEY: (&str, u32) = (CONSUMER_STORAGE_TOPIC, 0);
+
+// Reconnect Backoff
+pub const RECONNECT_BACKOFF_FACTOR: f64 = 1.1;
+pub const RECONNECT_BACKOFF_MIN_DURATION: Duration = Duration::from_secs(1);
+pub const RECONNECT_BACKOFF_MAX_DURATION: Duration = Duration::from_secs(30);
 
 // CLI config
 pub const CLI_PROFILES_DIR: &str = "profiles";

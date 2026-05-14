@@ -18,6 +18,7 @@ const DEFAULT_VERSION: &str = "0.1.0";
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "kebab-case")
 )]
 pub struct TopicConfig {
@@ -51,6 +52,7 @@ pub struct TopicConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "kebab-case")
 )]
 pub struct MetaConfig {
@@ -61,6 +63,7 @@ pub struct MetaConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "kebab-case")
 )]
 pub struct PartitionConfig {
@@ -72,7 +75,8 @@ pub struct PartitionConfig {
 
     #[cfg_attr(
         feature = "use_serde",
-        serde(skip_serializing_if = "Option::is_none", default)
+        serde(skip_serializing_if = "Option::is_none", default),
+        schemars(with = "String")
     )]
     pub max_size: Option<bytesize::ByteSize>,
 
@@ -99,6 +103,7 @@ pub struct PartitionConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "kebab-case")
 )]
 pub struct RetentionConfig {
@@ -108,13 +113,15 @@ pub struct RetentionConfig {
             skip_serializing_if = "Option::is_none",
             with = "humantime_serde",
             default
-        )
+        ),
+        schemars(with = "String")
     )]
     pub time: Option<Duration>,
 
     #[cfg_attr(
         feature = "use_serde",
-        serde(skip_serializing_if = "Option::is_none", default)
+        serde(skip_serializing_if = "Option::is_none", default),
+        schemars(with = "Option::<String>")
     )]
     pub segment_size: Option<bytesize::ByteSize>,
 }
@@ -123,6 +130,7 @@ pub struct RetentionConfig {
 #[cfg_attr(
     feature = "use_serde",
     derive(serde::Serialize, serde::Deserialize),
+    derive(schemars::JsonSchema),
     serde(rename_all = "kebab-case")
 )]
 pub struct CompressionConfig {
@@ -236,7 +244,7 @@ deduplication:
     age: 1m
   filter:
     transform:
-      uses: infinyon/dedup-filter@0.1.0
+      uses: fluvio/dedup-bloom-filter@0.1.0
 "#;
 
         //when
@@ -373,7 +381,7 @@ compression:
             },
             filter: Filter {
                 transform: Transform {
-                    uses: "infinyon/dedup-filter@0.1.0".to_string(),
+                    uses: "fluvio/dedup-bloom-filter@0.1.0".to_string(),
                     with: Default::default(),
                 },
             },

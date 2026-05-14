@@ -8,14 +8,14 @@ build-smdk: install_rustup_target
 build-cdk: install_rustup_target
 	$(CARGO_BUILDER) build --bin cdk -p cdk $(RELEASE_FLAG) $(TARGET_FLAG) $(VERBOSE_FLAG) $(SMARTENGINE_FLAG)
 
-build-fbm: install_rustup_target
-	$(CARGO_BUILDER) build --bin fbm -p fluvio-benchmark $(RELEASE_FLAG) $(TARGET_FLAG) $(VERBOSE_FLAG) $(SMARTENGINE_FLAG)
+build-benchmark: install_rustup_target
+	$(CARGO_BUILDER) build --bin fluvio-benchmark -p fluvio-benchmark $(RELEASE_FLAG) $(TARGET_FLAG) $(VERBOSE_FLAG) $(SMARTENGINE_FLAG)
 
 build-fvm: install_rustup_target
 	$(CARGO_BUILDER) build --bin fvm -p fluvio-version-manager $(RELEASE_FLAG) $(TARGET_FLAG) $(VERBOSE_FLAG) $(SMARTENGINE_FLAG)
 
 build-cli-minimal: install_rustup_target
-	# https://github.com/infinyon/fluvio/issues/1255
+	# https://github.com/fluvio-community/fluvio/issues/1255
 	cargo build --bin fluvio -p fluvio-cli $(RELEASE_FLAG) $(TARGET_FLAG) $(VERBOSE_FLAG) \
 	    --no-default-features --features consumer,producer-file-io
 

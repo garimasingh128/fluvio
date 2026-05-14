@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
 use async_channel::Receiver;
 use async_lock::RwLock;
 
@@ -45,12 +50,21 @@ pub(crate) enum BatchMetadataState {
 
 pub(crate) struct BatchMetadata {
     state: RwLock<BatchMetadataState>,
+    pub(crate) created_at: Instant,
 }
 
 impl BatchMetadata {
-    pub(crate) fn new(receiver: Receiver<ProducePartitionResponseFuture>) -> Self {
+    pub(crate) fn new(
+        receiver: Receiver<ProducePartitionResponseFuture>,
+        created_at: Option<Instant>,
+    ) -> Self {
         Self {
             state: RwLock::new(BatchMetadataState::Buffered(receiver)),
+            created_at: if let Some(created_at) = created_at {
+                created_at
+            } else {
+                Instant::now()
+            },
         }
     }
 

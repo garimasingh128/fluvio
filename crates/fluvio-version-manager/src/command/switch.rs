@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 
-use fluvio_hub_util::fvm::Channel;
+use fluvio_artifacts_util::fvm::Channel;
 
 use crate::common::notify::Notify;
 use crate::common::version_directory::VersionDirectory;
@@ -55,7 +55,7 @@ impl SwitchOpt {
                 version.to_string().bold()
             ));
 
-            let help = format!("fvm install {}", version);
+            let help = format!("fvm install {version}");
 
             notify.help(format!(
                 "Install the desired version using {}, and then retry this command.",

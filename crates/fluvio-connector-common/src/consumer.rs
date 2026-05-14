@@ -1,5 +1,11 @@
-use fluvio::consumer::{ConsumerConfigExtBuilder, OffsetManagementStrategy};
-use fluvio::{Fluvio, FluvioConfig, Offset};
+use std::{
+    io::{Error as IoError, ErrorKind},
+    sync::atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
+
+use fluvio::consumer::{BoxConsumerStream, ConsumerConfigExtBuilder, OffsetManagementStrategy};
+use fluvio::{Fluvio, FluvioClusterConfig, Offset};
 use fluvio_connector_package::config::{ConsumerPartitionConfig, OffsetConfig, OffsetStrategyConfig};
 use crate::{config::ConnectorConfig, Result};
 use crate::ensure_topic_exists;
@@ -9,8 +15,8 @@ pub use fluvio::consumer::ConsumerStream;
 
 pub async fn consumer_stream_from_config(
     config: &ConnectorConfig,
-) -> Result<(Fluvio, impl ConsumerStream)> {
-    let mut cluster_config = FluvioConfig::load()?;
+) -> Result<(Fluvio, BoxConsumerStream)> {
+    let mut cluster_config = FluvioClusterConfig::load()?;
     cluster_config.client_id = Some(format!("fluvio_connector_{}", &config.meta().name()));
 
     let fluvio = Fluvio::connect_with_config(&cluster_config).await?;
@@ -73,5 +79,29 @@ pub async fn consumer_stream_from_config(
     })?;
     let stream = fluvio.consumer_with_config(cfg).await?;
 
-    Ok((fluvio, stream))
+    Ok((fluvio, Box::pin(stream)))
+}
+
+pub fn init_ctrlc() -> Result<async_channel::Receiver<()>> {
+    let (s, r) = async_channel::bounded(1);
+    let invoked = AtomicBool::new(false);
+    let result = ctrlc::set_handler(move || {
+        if invoked.load(Ordering::SeqCst) {
+            std::process::exit(0);
+        } else {
+            invoked.store(true, Ordering::SeqCst);
+            let _ = s.try_send(());
+            std::thread::sleep(Duration::from_secs(2));
+            std::process::exit(0);
+        }
+    });
+
+    if let Err(err) = result {
+        return Err(IoError::new(
+            ErrorKind::InvalidData,
+            format!("CTRL-C handler can't be initialized {err}"),
+        )
+        .into());
+    }
+    Ok(r)
 }

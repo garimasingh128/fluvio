@@ -17,7 +17,7 @@ use enum_display::EnumDisplay;
 static CONNECTOR_TEMPLATE: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../connector/cargo_template");
 
-/// Generate new SmartConnector project
+/// Generate new Connector project
 #[derive(Debug, Parser)]
 pub struct GenerateCmd {
     /// Connector Name
@@ -31,7 +31,7 @@ pub struct GenerateCmd {
     #[arg(long, value_name = "DESCRIPTION")]
     conn_description: Option<String>,
 
-    /// Local path to generate the SmartConnector project.
+    /// Local path to generate the Connector project.
     /// Default to directory with project name, created in current directory
     #[arg(long, env = "CDK_DESTINATION", value_name = "PATH")]
     destination: Option<PathBuf>,
@@ -86,7 +86,7 @@ impl GenerateCmd {
             ..Default::default()
         };
 
-        let _gen_dir = generate(args).map_err(Error::from)?;
+        let _gen_dir = generate(args)?;
 
         Ok(())
     }
@@ -113,13 +113,13 @@ enum CdkTemplateValue {
 impl Display for CdkTemplateValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CdkTemplateValue::Name(name) => write!(f, "project-name={}", name),
-            CdkTemplateValue::Group(group) => write!(f, "project-group={}", group),
+            CdkTemplateValue::Name(name) => write!(f, "project-name={name}"),
+            CdkTemplateValue::Group(group) => write!(f, "project-group={group}"),
             CdkTemplateValue::Description(description) => {
-                write!(f, "project-description={}", description)
+                write!(f, "project-description={description}")
             }
             CdkTemplateValue::ConnFluvioDependencyHash(hash) => {
-                write!(f, "fluvio-cargo-dependency-hash={}", hash)
+                write!(f, "fluvio-cargo-dependency-hash={hash}")
             }
             CdkTemplateValue::ConnType(conn_type) => write!(f, "connector-type={conn_type}"),
             CdkTemplateValue::ConnPublic(conn_public) => {

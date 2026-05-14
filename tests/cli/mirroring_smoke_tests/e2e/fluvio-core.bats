@@ -16,7 +16,7 @@ setup_file() {
     export REMOTE_PROFILE
     debug_msg "Remote profile: $REMOTE_PROFILE"
 
-    REMOTE_NAME=edge1
+    REMOTE_NAME=remote1
     export REMOTE_NAME
     debug_msg "Remote name: $REMOTE_NAME"
 
@@ -24,7 +24,7 @@ setup_file() {
     export REMOTE_PROFILE_2
     debug_msg "Remote profile: $REMOTE_PROFILE_2"
 
-    REMOTE_NAME_2=edge2
+    REMOTE_NAME_2=remote2
     export REMOTE_NAME_2
     debug_msg "Remote name: $REMOTE_NAME_2"
 
@@ -35,6 +35,10 @@ setup_file() {
     TOPIC_NAME=mirror-topic
     export TOPIC_NAME
     debug_msg "Topic name: $TOPIC_NAME"
+
+    REVERSE_TOPIC_NAME=mirror-topic-reverse
+    export REVERSE_TOPIC_NAME
+    debug_msg "Topic name: $REVERSE_TOPIC_NAME"
 
     HOME_PROFILE=$($FLUVIO_BIN profile)
     export HOME_PROFILE
@@ -107,11 +111,31 @@ setup_file() {
     assert_success
 }
 
+@test "Can create a mirror topic with the remote clusters reverse" {
+    echo "[\"$REMOTE_NAME\",\"$REMOTE_NAME_2\"]" > remotes_devices.json
+    run timeout 15s "$FLUVIO_BIN" topic create "$REVERSE_TOPIC_NAME" --mirror-apply remotes_devices.json --home-to-remote
+
+    assert_output "topic \"$REVERSE_TOPIC_NAME\" created"
+    assert_success
+}
+
+@test "Can produce message to reverse mirror topic from home" {
+    run bash -c 'echo 3 | timeout 15s "$FLUVIO_BIN" produce "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo c | timeout 15s "$FLUVIO_BIN" produce -p 0 "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo 4 | timeout 15s "$FLUVIO_BIN" produce -m "$REMOTE_NAME" "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo d | timeout 15s "$FLUVIO_BIN" produce -m "$REMOTE_NAME" "$REVERSE_TOPIC_NAME"'
+    assert_success
+}
+
 @test "Can switch to remote cluster 1" {
     run timeout 15s "$FLUVIO_BIN" profile switch "$REMOTE_PROFILE"
     assert_output ""
     assert_success
 }
+
 
 #TODO: actually we should have the topics created by the export file too.
 @test "Can't produce message to mirror topic from remote 1 before connect to home" {
@@ -130,7 +154,7 @@ setup_file() {
 }
 
 @test "Home status at remote 1 should show the home cluster connected" {
-    sleep 15
+    sleep 60
     run timeout 15s "$FLUVIO_BIN" home status
 
     assert_success
@@ -150,6 +174,42 @@ setup_file() {
     assert_success
 }
 
+@test "Can't produce message to reverse mirror topic from remote 1" {
+    run bash -c 'echo 1 | timeout 15s "$FLUVIO_BIN" produce "$REVERSE_TOPIC_NAME"'
+
+    assert_output "Producer error: Producer received an error code: produce from remote target is not allowed"
+    assert_failure
+}
+
+@test "Can consume message from reverse mirror topic from remote 1" {
+    sleep 5
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" -p 0 -B -d
+    assert_output 3$'\n'c$'\n'4$'\n'd
+    assert_success
+
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" --mirror "$REMOTE_NAME" -B -d
+    assert_output 3$'\n'c$'\n'4$'\n'd
+    assert_success
+}
+
+@test "Can switch back to home cluster" {
+    run timeout 15s "$FLUVIO_BIN" profile switch "$HOME_PROFILE"
+    assert_output ""
+    assert_success
+}
+
+
+@test "Can produce message to reverse mirror topic from home again" {
+    run bash -c 'echo 5 | timeout 15s "$FLUVIO_BIN" produce -p 1 "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo e | timeout 15s "$FLUVIO_BIN" produce -p 1 "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo 6 | timeout 15s "$FLUVIO_BIN" produce -m "$REMOTE_NAME_2" "$REVERSE_TOPIC_NAME"'
+    assert_success
+    run bash -c 'echo f | timeout 15s "$FLUVIO_BIN" produce -m "$REMOTE_NAME_2" "$REVERSE_TOPIC_NAME"'
+    assert_success
+}
+
 @test "Can switch to remote cluster 2" {
     run timeout 15s "$FLUVIO_BIN" profile switch "$REMOTE_PROFILE_2"
     assert_output ""
@@ -165,7 +225,7 @@ setup_file() {
 }
 
 @test "Home status at remote 2 should show the home cluster connected" {
-    sleep 15
+    sleep 60
     run timeout 15s "$FLUVIO_BIN" home status
 
     assert_success
@@ -185,6 +245,24 @@ setup_file() {
     assert_success
 }
 
+@test "Can't produce message to reverse mirror topic from remote 2" {
+    run bash -c 'echo 9 | timeout 15s "$FLUVIO_BIN" produce "$REVERSE_TOPIC_NAME"'
+
+    assert_output "Producer error: Producer received an error code: produce from remote target is not allowed"
+    assert_failure
+}
+
+@test "Can consume message from reverse mirror topic from remote 2" {
+    sleep 5
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" -p 0 -B -d
+    assert_output 5$'\n'e$'\n'6$'\n'f
+    assert_success
+
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" --mirror "$REMOTE_NAME_2" -B -d
+    assert_output 5$'\n'e$'\n'6$'\n'f
+    assert_success
+}
+
 @test "Can't delete mirror topic from remote 2" {
     run timeout 15s "$FLUVIO_BIN" topic delete "$TOPIC_NAME"
 
@@ -192,7 +270,7 @@ setup_file() {
     assert_failure
 }
 
-@test "Can switch back to home cluster" {
+@test "Can switch back to home cluster again" {
     run timeout 15s "$FLUVIO_BIN" profile switch "$HOME_PROFILE"
     assert_output ""
     assert_success
@@ -206,6 +284,21 @@ setup_file() {
     assert_line --partial --index 1 "Connected  Connected"
     assert_line --partial --index 2 "Connected  Connected"
     assert [ ${#lines[@]} -eq 3 ]
+}
+
+@test "Can consume message from reverse mirror topic from home" {
+    sleep 5
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" -p 0 -B -d
+    assert_output 3$'\n'c$'\n'4$'\n'd
+    assert_success
+	
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" -p 1 -B -d
+    assert_output 5$'\n'e$'\n'6$'\n'f
+    assert_success
+
+    run timeout 15s "$FLUVIO_BIN" consume "$REVERSE_TOPIC_NAME" --mirror "$HOME" -B -d
+    assert_output 3$'\n'c$'\n'4$'\n'd$'\n'5$'\n'e$'\n'6$'\n'f
+    assert_success
 }
 
 @test "Can consume message from mirror topic produced from remote 1 by partition or remote" {
@@ -234,8 +327,12 @@ setup_file() {
 
 @test "Can delete mirror topic" {
     run timeout 15s "$FLUVIO_BIN" topic delete "$TOPIC_NAME"
-
     assert_output "topic \"$TOPIC_NAME\" deleted"
+    assert_success
+
+
+    run timeout 15s "$FLUVIO_BIN" topic delete "$REVERSE_TOPIC_NAME"
+    assert_output "topic \"$REVERSE_TOPIC_NAME\" deleted"
     assert_success
 }
 

@@ -2,8 +2,7 @@
     feature = "nightly",
     doc = include_str!("../../../DEVELOPER.md")
 )]
-
-#[doc = include_str!("../README.md")]
+#![doc = include_str!("../README.md")]
 
 mod admin;
 mod error;
@@ -18,8 +17,9 @@ pub mod metrics;
 pub mod spu;
 
 pub use error::FluvioError;
-pub use config::FluvioConfig;
+pub use config::{FluvioClusterConfig, FluvioConfig};
 pub use producer::{
+    ProducerCallback, SharedProducerCallback, ProduceCompletionBatchEvent,
     TopicProducerConfigBuilder, TopicProducerConfig, TopicProducer, TopicProducerPool, RecordKey,
     ProduceOutput, FutureRecordMetadata, RecordMetadata, DeliverySemantic, RetryPolicy,
     RetryStrategy, Partitioner, PartitionerConfig, ProducerError,
@@ -41,12 +41,12 @@ pub use crate::fluvio::Fluvio;
 
 pub use fluvio_compression::Compression;
 
-use fluvio_types::PartitionId;
+pub use fluvio_types::PartitionId;
 use tracing::instrument;
 
 /// The minimum VERSION of the Fluvio Platform that this client is compatible with.
 const MINIMUM_PLATFORM_VERSION: &str = "0.9.0";
-pub(crate) const VERSION: &str = include_str!("../../../VERSION");
+pub(crate) const VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/VERSION"));
 
 /// Creates a producer that sends records to the named topic
 ///

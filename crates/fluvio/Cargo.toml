@@ -1,41 +1,46 @@
 [package]
 name = "fluvio"
-version = "0.23.2"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
+description = "The official Fluvio driver for Rust"
 categories = ["database"]
 keywords = ["streaming", "stream", "queue"]
-repository = "https://github.com/infinyon/fluvio"
-description = "The official Fluvio driver for Rust"
 readme = "README.md"
+version.workspace = true
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [lib]
 name = "fluvio"
 path = "src/lib.rs"
 
 [features]
-default = ["openssl", "compress"]
+default = ["rustls", "compress", "rustls-aws"]
 admin = ["fluvio-sc-schema/use_serde"]
 smartengine = ["fluvio-smartengine"]
 openssl = ["fluvio-future/openssl_tls"]
-rustls = ["fluvio-future/rust_tls"]
+rustls = ["fluvio-future/rust_tls", "dep:rustls"]
 compress = ["fluvio-compression/compress", "fluvio-protocol/compress"]
 nightly = []
 unstable = []
+# Crypto providers for rustls (mutually exclusive)
+rustls-aws = ["rustls?/aws-lc-rs", "rustls?/prefer-post-quantum"]
+rustls-ring = ["rustls?/ring"]
 
 [dependencies]
+adaptive_backoff = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 cfg-if = { workspace = true }
 derive_builder = { workspace = true }
+parking_lot = { workspace = true }
 event-listener = { workspace = true }
 futures-util = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ['derive'] }
-tokio = { workspace = true, features = ["macros", "sync"] }
+tokio = { workspace = true, features = ["macros"] }
 thiserror = { workspace = true }
 semver = { workspace = true }
 pin-project = { workspace = true }
@@ -47,10 +52,14 @@ tracing = { workspace = true }
 
 # Fluvio dependencies
 fluvio-future = { workspace = true, features = [
+    "future",
     "task",
-    "task_unstable",
     "retry",
-    "sync",
+] }
+rustls = { workspace = true, optional = true, default-features = false, features = [
+    "std",
+    "logging",
+    "tls12",
 ] }
 fluvio-types = { workspace = true, features = ["events"] }
 fluvio-sc-schema = { workspace = true }
@@ -73,12 +82,13 @@ fluvio-spu-schema = { workspace = true, features = ["file"] }
 fluvio-spu-schema = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = { workspace = true }
 fluvio-spu-schema = { workspace = true }
 chrono = { workspace = true, features = ["wasmbind", "clock"] }
 
 [dev-dependencies]
-async-std = { workspace = true }
-fluvio-future = { workspace = true, features = ["io", "fixture"] }
+fluvio-future = { workspace = true, features = ["io", "fixture", "future"] }
+mockall = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }

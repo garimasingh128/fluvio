@@ -16,7 +16,7 @@ use lib_cargo_crate::{Info, InfoOpts};
 static SMART_MODULE_TEMPLATE: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../smartmodule/cargo_template");
 const FLUVIO_SMARTMODULE_CRATE_NAME: &str = "fluvio-smartmodule";
-const FLUVIO_SMARTMODULE_REPO: &str = "https://github.com/infinyon/fluvio.git";
+const FLUVIO_SMARTMODULE_REPO: &str = "https://github.com/fluvio-community/fluvio.git";
 
 /// Generate new SmartModule project
 #[derive(Debug, Parser)]
@@ -195,11 +195,7 @@ impl GenerateCmd {
         let group = self.project_group.and_then(|g| {
             debug!("Using user provided project group: \"{}\"", &g);
 
-            if g.is_empty() {
-                None
-            } else {
-                Some(g)
-            }
+            if g.is_empty() { None } else { Some(g) }
         });
 
         let sm_params = match (self.with_params, self.no_params) {
@@ -286,7 +282,7 @@ impl GenerateCmd {
             ..Default::default()
         };
 
-        generate(args).map_err(Error::from)?;
+        generate(args)?;
 
         Ok(())
     }
@@ -553,6 +549,8 @@ mod test {
     use super::CargoSmDependSource;
     use super::FLUVIO_SMARTMODULE_REPO;
 
+    use crate::SMARTMODULE_TOML;
+
     #[test]
     fn test_default_template() {
         let template = SmdkTemplate::default().unwrap();
@@ -568,7 +566,7 @@ mod test {
 
         let mut temp_dir = temp_dir.unwrap();
         let smart_toml =
-            temp_dir.find(|entry| entry.as_ref().unwrap().file_name().eq("SmartModule.toml"));
+            temp_dir.find(|entry| entry.as_ref().unwrap().file_name().eq(SMARTMODULE_TOML));
 
         assert!(
             smart_toml.is_some(),

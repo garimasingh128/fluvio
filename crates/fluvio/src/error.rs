@@ -38,7 +38,7 @@ pub enum FluvioError {
     NegativeOffset(i64),
     #[error("Cluster (with platform version {cluster_version}) is older than the minimum required version {client_minimum_version}
 To interact with this cluster, please install the matching CLI version using the following command:
-    curl -fsS https://hub.infinyon.cloud/install/install.sh | VERSION={cluster_version} bash
+    curl -fsS https://raw.githubusercontent.com/fluvio-community/fluvio/master/install.sh | VERSION={cluster_version} bash
     ")]
     MinimumPlatformVersion {
         cluster_version: Version,
@@ -46,7 +46,7 @@ To interact with this cluster, please install the matching CLI version using the
     },
     #[error("Cluster (with platform version {cluster_version}) is newer than this CLI major version {client_maximum_version}
 To interact with this cluster, please install the matching CLI version using the following command:
-    curl -fsS https://hub.infinyon.cloud/install/install.sh | VERSION={cluster_version} bash
+    curl -fsS https://raw.githubusercontent.com/fluvio-community/fluvio/master/install.sh | VERSION={cluster_version} bash
     ")]
     MaximumPlatformVersion {
         cluster_version: Version,
@@ -67,4 +67,12 @@ To interact with this cluster, please install the matching CLI version using the
     SmartModuleConfigBuilder(#[from] fluvio_smartengine::SmartModuleConfigBuilderError),
     #[error("Unknown error: {0}")]
     Other(String),
+}
+
+pub fn anyhow_version_error(platform_ver: &str) -> anyhow::Error {
+    use anyhow::anyhow;
+    let client_ver = crate::VERSION.trim();
+    anyhow!(
+        "Fluvio Client {client_ver} and Cluster {platform_ver} versions are not compatible. Please use a client compatible with {platform_ver}"
+    )
 }

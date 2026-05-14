@@ -1,11 +1,11 @@
 [package]
 name = "fluvio-auth"
-version = "0.0.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-edition = "2021"
-license = "Apache-2.0"
-repository = "https://github.com/infinyon/fluvio"
 description = "Authorization framework for Fluvio"
+version = "0.0.0"
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 publish = false
 
 
@@ -24,7 +24,7 @@ tracing = { workspace = true }
 x509-parser = { workspace = true }
 
 fluvio-controlplane-metadata = { workspace = true  }
-fluvio-future = { workspace = true, features = ["net", "openssl_tls"] }
+fluvio-future = { workspace = true, features = ["net"] }
 fluvio-protocol = { workspace = true }
 fluvio-socket = { workspace = true }
 flv-tls-proxy = { workspace = true }

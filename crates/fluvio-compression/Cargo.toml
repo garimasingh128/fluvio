@@ -1,13 +1,13 @@
 [package]
 name = "fluvio-compression"
-version = "0.3.3"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
+description = "Fluvio Compression library"
 categories = ["compression"]
 keywords = ["fluvio", "compression"]
-repository = "https://github.com/infinyon/fluvio"
-description = "Fluvio Compression library"
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [features]
 default = ["compress"]
@@ -27,8 +27,10 @@ serde = { workspace = true,  features = ['derive'] }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 
+fluvio-types = { workspace = true }
+
 # Optional Dependencies
 flate2 = { workspace = true, optional = true }
-lz4_flex = { version = "0.11.1", default-features = false, features = ["safe-decode", "safe-encode", "frame"], optional = true }
+lz4_flex = { version = "0.11.6", default-features = false, features = ["safe-decode", "safe-encode", "frame"], optional = true }
 snap = { version = "1", optional = true }
 zstd = { version = "0.13.0", features = ['wasm'], default-features = false, optional = true }

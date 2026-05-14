@@ -367,19 +367,18 @@ impl PartitonStatusExtension for PartitionStatus {
 
         for candidate in &self.replicas {
             // only do for live replicas
-            if online.contains(&candidate.spu) {
-                if let ElectionScoring::Score(score) =
+            if online.contains(&candidate.spu)
+                && let ElectionScoring::Score(score) =
                     policy.potential_leader_score(candidate, &self.leader)
-                {
-                    if candidate_spu.is_some() {
-                        if score < best_score {
-                            best_score = score;
-                            candidate_spu = Some(candidate.spu);
-                        }
-                    } else {
+            {
+                if candidate_spu.is_some() {
+                    if score < best_score {
                         best_score = score;
                         candidate_spu = Some(candidate.spu);
                     }
+                } else {
+                    best_score = score;
+                    candidate_spu = Some(candidate.spu);
                 }
             }
         }
@@ -646,7 +645,7 @@ mod test2 {
         ]);
 
         let groups = partitions.group_by_spu().await;
-        println!("groups: {:#?}", groups);
+        println!("groups: {groups:#?}");
         assert_eq!(groups.len(), 6); // spus are 0,1,2,3,4,5
         assert_eq!(groups[&0].leaders, 2); // spu 0 is leader for 1 partition
         assert_eq!(groups[&0].followers, 1); // spu 0 is follower for 1 partition

@@ -413,12 +413,13 @@ impl StreamFetchHandler {
                     sm_ctx.chain_mut(),
                     &mut file_batch_iterator,
                     self.max_bytes as usize,
-                    self.metrics.chain_metrics(),
                 )
                 .map_err(|err| {
                     StreamFetchError::Fetch(ErrorCode::Other(format!("SmartModule err {err}")))
                 })?;
                 let metrics_update = IncreaseValue::from(&batch);
+
+                sm_ctx.update_global_metrics();
 
                 let (offset, wait) = self
                     .send_processed_response(
@@ -481,7 +482,7 @@ impl StreamFetchHandler {
         type DefaultPartitionResponse = FetchablePartitionResponse<RecordSet<RawRecords>>;
 
         let error_code = match smartmodule_error {
-            Some(error) => ErrorCode::SmartModuleRuntimeError(error),
+            Some(error) => ErrorCode::SmartModuleRuntimeError(Box::new(error)),
             None => file_partition_response.error_code,
         };
         trace!(?error_code, "SmartModule error code output:");

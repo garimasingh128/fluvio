@@ -184,7 +184,7 @@ impl<C: MetadataItem> TopicNextState<C> {
     ) -> TopicNextState<C> {
         match topic.spec().replicas() {
             // Computed Topic
-            ReplicaSpec::Computed(ref param) => match topic.status.resolution {
+            ReplicaSpec::Computed(param) => match topic.status.resolution {
                 TopicResolution::Init | TopicResolution::InvalidConfig => {
                     validate_computed_topic_parameters(param)
                 }
@@ -222,14 +222,14 @@ impl<C: MetadataItem> TopicNextState<C> {
                     if next_state.resolution == TopicResolution::Provisioned {
                         debug!("creating new partitions");
                         next_state.partitions =
-                            topic.partitions_from_replicas(scheduler.partitions()).await;
+                            topic.create_new_partitions(scheduler.partitions()).await;
                     }
                     next_state
                 }
             },
 
             // Assign Topic
-            ReplicaSpec::Assigned(ref partition_map) => match topic.status.resolution {
+            ReplicaSpec::Assigned(partition_map) => match topic.status.resolution {
                 TopicResolution::Init | TopicResolution::InvalidConfig => {
                     validate_assigned_topic_parameters(partition_map)
                 }
@@ -239,7 +239,7 @@ impl<C: MetadataItem> TopicNextState<C> {
                             .await;
                     if next_state.resolution == TopicResolution::Provisioned {
                         next_state.partitions =
-                            topic.partitions_from_replicas(scheduler.partitions()).await;
+                            topic.create_new_partitions(scheduler.partitions()).await;
                     }
                     next_state
                 }
@@ -251,14 +251,14 @@ impl<C: MetadataItem> TopicNextState<C> {
                     let mut next_state = TopicNextState::same_next_state(topic);
                     if next_state.resolution == TopicResolution::Provisioned {
                         next_state.partitions =
-                            topic.partitions_from_replicas(scheduler.partitions()).await;
+                            topic.create_new_partitions(scheduler.partitions()).await;
                     }
                     next_state
                 }
             },
 
             // Mirror Topic
-            ReplicaSpec::Mirror(ref mirror_config) => match topic.status.resolution {
+            ReplicaSpec::Mirror(mirror_config) => match topic.status.resolution {
                 // same logic for computed topic
                 // should collapse
                 TopicResolution::Init | TopicResolution::InvalidConfig => {
@@ -298,6 +298,7 @@ impl<C: MetadataItem> TopicNextState<C> {
                                             home_spu_key: spu.key.clone(),
                                             home_cluster: src.home_cluster.clone(),
                                             home_spu_endpoint: spu.endpoint.clone(),
+                                            target: src.target,
                                         }),
                                     );
                                 }
@@ -335,7 +336,7 @@ impl<C: MetadataItem> TopicNextState<C> {
                     if next_state.resolution == TopicResolution::Provisioned {
                         debug!("creating new partitions");
                         next_state.partitions =
-                            topic.partitions_from_replicas(scheduler.partitions()).await;
+                            topic.create_new_partitions(scheduler.partitions()).await;
                     }
                     next_state
                 }

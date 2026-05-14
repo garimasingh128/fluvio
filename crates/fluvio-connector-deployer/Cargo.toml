@@ -1,17 +1,19 @@
 [package]
 name = "fluvio-connector-deployer"
-version = "0.0.0"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-repository = "https://github.com/infinyon/fluvio"
 description = "Deployer Fluvio Connector"
+version = "0.0.0"
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 
 
 [dependencies]
 tracing = { workspace = true }
 anyhow = { workspace = true }
+clap = { workspace = true, features = ["std", "derive", "help", "usage", "error-context", "env", "wrap_help", "suggestions"], default-features = false }
 derive_builder = { workspace = true }
+enum-display = { workspace = true }
 
 fluvio-connector-package = { workspace = true  }

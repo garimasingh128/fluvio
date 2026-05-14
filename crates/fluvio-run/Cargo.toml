@@ -1,12 +1,12 @@
 [package]
 name = "fluvio-run"
-version = "0.0.0"
-edition = "2021"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
 description = "Fluvio Engine Runner"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [lib]
 name = "fluvio_run"
@@ -31,5 +31,5 @@ thiserror = { workspace = true }
 # regardless of TLS, sc and spu always use openssl_tls for now because we need cert API
 fluvio-future = { workspace = true, features = ["subscriber"] }
 fluvio-extension-common = { workspace = true }
-fluvio-sc = { path = "../fluvio-sc", default-features = false }
-fluvio-spu = { path = "../fluvio-spu", default-features = false  }
+fluvio-sc = { workspace = true }
+fluvio-spu = { workspace = true }

@@ -2,7 +2,7 @@
 name = "{{project-name}}"
 version = "0.1.0"
 authors = ["{{authors}}"]
-edition = "2021"
+edition = "2024"
 
 [workspace]
 
@@ -10,5 +10,5 @@ edition = "2021"
 {% if connector-type == "sink" %}futures = { version = "0.3", default-features = false }{% endif %}
 serde = { version = "1.0", default-features = false, features = ["derive"]}
 
-fluvio = { git = "https://github.com/infinyon/fluvio", rev = "{{fluvio-cargo-dependency-hash}}" }
-fluvio-connector-common = { git = "https://github.com/infinyon/fluvio", rev = "{{fluvio-cargo-dependency-hash}}", features = ["derive"] }
+fluvio = { git = "https://github.com/fluvio-community/fluvio", rev = "{{fluvio-cargo-dependency-hash}}" }
+fluvio-connector-common = { git = "https://github.com/fluvio-community/fluvio", rev = "{{fluvio-cargo-dependency-hash}}", features = ["derive"] }

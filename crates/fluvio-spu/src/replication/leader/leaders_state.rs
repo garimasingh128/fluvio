@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use async_lock::RwLock;
 use fluvio_controlplane::replica::Replica;
+use fluvio_types::defaults::CONSUMER_REPLICA_KEY;
 use std::collections::HashMap;
 
 use tracing::{error, instrument};
@@ -62,6 +63,10 @@ impl<S> ReplicaLeadersState<S> {
         let mut writer = self.write().await;
         writer.insert(replica, state)
     }
+
+    pub async fn is_consumer_offset_leader(&self) -> Option<LeaderReplicaState<S>> {
+        self.get(&CONSUMER_REPLICA_KEY.into()).await
+    }
 }
 
 impl<S> ReplicaLeadersState<S>
@@ -82,18 +87,20 @@ where
     }
 
     /// find replica with mirror target that matches remote cluster and sourcre replica
-    pub async fn find_mirror_home_leader(
+    /// also return if it is source or target
+    pub(crate) async fn find_mirror_home_leader(
         &self,
         remote_cluster: &str,
         home_replica: &str,
-    ) -> Option<SharedLeaderState<S>> {
+    ) -> Option<(SharedLeaderState<S>, bool)> {
         let read = self.read().await;
         for (_replica_key, state) in read.iter() {
             let replica_config = state.get_replica();
-            if let Some(PartitionMirrorConfig::Home(home)) = &replica_config.mirror {
-                if home.remote_cluster == remote_cluster && home.remote_replica == home_replica {
-                    return Some(state.clone());
-                }
+            if let Some(PartitionMirrorConfig::Home(home)) = &replica_config.mirror
+                && home.remote_cluster == remote_cluster
+                && home.remote_replica == home_replica
+            {
+                return Some((state.clone(), home.source));
             }
         }
         None

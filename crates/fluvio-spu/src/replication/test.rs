@@ -3,9 +3,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::env::temp_dir;
 
+use fluvio::Isolation;
 use fluvio_controlplane::replica::Replica;
 use fluvio_controlplane::spu_api::update_replica::UpdateReplicaRequest;
+use fluvio_storage::iterators::FileBatchIterator;
 use fluvio_types::event::offsets::OffsetPublisher;
+use rand::Rng;
 use tracing::debug;
 use derive_builder::Builder;
 use once_cell::sync::Lazy;
@@ -15,7 +18,7 @@ use fluvio_future::timer::sleep;
 use flv_util::fixture::ensure_clean_dir;
 use fluvio_types::SpuId;
 use fluvio_controlplane_metadata::spu::{IngressAddr, IngressPort, SpuSpec};
-use fluvio_protocol::fixture::create_raw_recordset;
+use fluvio_protocol::fixture::{create_raw_recordset, create_raw_recordset_inner};
 
 use crate::core::{DefaultSharedGlobalContext, GlobalContext};
 use crate::config::SpuConfig;
@@ -29,6 +32,7 @@ const HOST: &str = "127.0.0.1";
 const MAX_WAIT_LEADER: u64 = 300;
 const MAX_WAIT_FOLLOWER: u64 = 100;
 const WAIT_TERMINATE: u64 = 1000;
+const REJECT_WAIT: u64 = 11;
 
 const LEADER: SpuId = 5001;
 const FOLLOWER1: SpuId = 5002;
@@ -36,11 +40,7 @@ const FOLLOWER2: SpuId = 5003;
 
 static MAX_WAIT_REPLICATION: Lazy<u64> = Lazy::new(|| {
     use std::env;
-    if env::var("CI").is_ok() {
-        5000
-    } else {
-        1000
-    }
+    if env::var("CI").is_ok() { 5000 } else { 1000 }
 });
 
 #[derive(Builder, Debug)]
@@ -120,11 +120,15 @@ impl TestConfig {
 
     /// generate test replica with assigned SPU
     fn replica(&self) -> Replica {
+        self.replica_inner(TOPIC.to_owned())
+    }
+
+    fn replica_inner(&self, topic: String) -> Replica {
         let mut followers = vec![LEADER];
         for i in 0..self.followers {
             followers.push(self.follower_id(i));
         }
-        Replica::new((TOPIC, 0), self.base_id, followers)
+        Replica::new((topic, 0), self.base_id, followers)
     }
 
     pub fn leader_addr(&self) -> String {
@@ -151,7 +155,13 @@ impl TestConfig {
         &self,
     ) -> (DefaultSharedGlobalContext, LeaderReplicaState<FileReplica>) {
         let replica = self.replica();
+        self.leader_replica_inner(replica).await
+    }
 
+    pub async fn leader_replica_inner(
+        &self,
+        replica: Replica,
+    ) -> (DefaultSharedGlobalContext, LeaderReplicaState<FileReplica>) {
         let gctx = self.leader_ctx().await;
         gctx.replica_localstore().sync_all(vec![replica.clone()]);
 
@@ -213,8 +223,9 @@ impl TestConfigBuilder {
 ///    
 #[fluvio_future::test(ignore)]
 async fn test_just_leader() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
-        .base_port(13000_u16)
+        .base_port(port)
         .generate("just_leader");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -255,9 +266,10 @@ async fn test_just_leader() {
 /// Replicating with existing records
 #[fluvio_future::test(ignore)]
 async fn test_replication2_existing() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(1_u16)
-        .base_port(13010_u16)
+        .base_port(port)
         .generate("replication2_existing");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -322,9 +334,10 @@ async fn test_replication2_existing() {
 ///    
 #[fluvio_future::test(ignore)]
 async fn test_replication2_new_records() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(1_u16)
-        .base_port(13020_u16)
+        .base_port(port)
         .generate("replication2_new");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -395,9 +408,10 @@ async fn test_replication2_new_records() {
 /// test with 3 SPU
 #[fluvio_future::test(ignore)]
 async fn test_replication3_existing() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(2_u16)
-        .base_port(13030_u16)
+        .base_port(port)
         .generate("replication3_existing");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -456,9 +470,10 @@ async fn test_replication3_existing() {
 ///    
 #[fluvio_future::test(ignore)]
 async fn test_replication3_new_records() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(2_u16)
-        .base_port(13040_u16)
+        .base_port(port)
         .generate("replication3_new");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -529,9 +544,10 @@ async fn test_replication3_new_records() {
 ///    
 #[fluvio_future::test(ignore)]
 async fn test_replication2_promote() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(1_u16)
-        .base_port(13050_u16)
+        .base_port(port)
         .generate("replication2_promote");
 
     let (leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -557,28 +573,34 @@ async fn test_replication2_promote() {
     sleep(Duration::from_millis(*MAX_WAIT_REPLICATION)).await;
 
     // check follower replica exists before
-    assert!(follower_ctx
-        .followers_state()
-        .get(&new_replica.id)
-        .await
-        .is_some());
+    assert!(
+        follower_ctx
+            .followers_state()
+            .get(&new_replica.id)
+            .await
+            .is_some()
+    );
 
     // promote ctx
     follower_ctx.promote(&new_replica, &old_replica).await;
 
     // ensure follower ctx is removed
-    assert!(follower_ctx
-        .followers_state()
-        .get(&new_replica.id)
-        .await
-        .is_none());
+    assert!(
+        follower_ctx
+            .followers_state()
+            .get(&new_replica.id)
+            .await
+            .is_none()
+    );
 
     // ensure leader ctx is there
-    assert!(follower_ctx
-        .leaders_state()
-        .get(&new_replica.id)
-        .await
-        .is_some());
+    assert!(
+        follower_ctx
+            .leaders_state()
+            .get(&new_replica.id)
+            .await
+            .is_some()
+    );
 
     sleep(Duration::from_millis(WAIT_TERMINATE)).await;
 
@@ -589,9 +611,10 @@ async fn test_replication2_promote() {
 /// receiving request from SC
 #[fluvio_future::test(ignore)]
 async fn test_replication_dispatch_in_sequence() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(1_u16)
-        .base_port(13060_u16)
+        .base_port(port)
         .generate("replication_dispatch_in_sequence");
 
     let leader_gctx = builder.leader_ctx().await;
@@ -613,11 +636,13 @@ async fn test_replication_dispatch_in_sequence() {
         .get(&replica.id)
         .await
         .expect("replica");
-    assert!(leader_gctx
-        .followers_state()
-        .get(&replica.id)
-        .await
-        .is_none());
+    assert!(
+        leader_gctx
+            .followers_state()
+            .get(&replica.id)
+            .await
+            .is_none()
+    );
     // should be new
     assert_eq!(leader.leo(), 0);
     assert_eq!(leader.hw(), 0);
@@ -665,9 +690,10 @@ async fn test_replication_dispatch_in_sequence() {
 #[fluvio_future::test(ignore)]
 async fn test_replication_dispatch_out_of_sequence() {
     //std::env::set_var("FLV_SHORT_RECONCILLATION", "1");
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
         .followers(1_u16)
-        .base_port(13070_u16)
+        .base_port(port)
         .generate("replication_dispatch_out_of_sequence");
 
     let replica = builder.replica();
@@ -707,11 +733,13 @@ async fn test_replication_dispatch_out_of_sequence() {
         .get(&replica.id)
         .await
         .expect("replica");
-    assert!(leader_gctx
-        .followers_state()
-        .get(&replica.id)
-        .await
-        .is_none());
+    assert!(
+        leader_gctx
+            .followers_state()
+            .get(&replica.id)
+            .await
+            .is_none()
+    );
     // should be new
     assert_eq!(leader.leo(), 0);
     assert_eq!(leader.hw(), 0);
@@ -739,8 +767,9 @@ async fn test_replication_dispatch_out_of_sequence() {
 
 #[fluvio_future::test()]
 async fn test_replica_state_cleans_up_offset_producers() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
     let builder = TestConfig::builder()
-        .base_port(13000_u16)
+        .base_port(port)
         .generate("just_leader");
 
     let (_leader_gctx, leader_replica) = builder.leader_replica().await;
@@ -750,7 +779,7 @@ async fn test_replica_state_cleans_up_offset_producers() {
 
     {
         let publishers = shared_publishers.lock().await;
-        assert!(publishers.len() == 0);
+        assert!(publishers.is_empty());
     }
 
     // Add 10 publishers and let them drop, should correspond to replica_state::CLEANUP_FREQUENCY
@@ -770,4 +799,233 @@ async fn test_replica_state_cleans_up_offset_producers() {
         .await;
     let publishers = shared_publishers.lock().await;
     assert!(publishers.len() == 1);
+}
+
+/// Test 2 replicas but one replica is rejected, and than both is sync
+#[fluvio_future::test(ignore)]
+async fn test_sync_2_replicas_but_one_reject() {
+    let port = portpicker::pick_unused_port().expect("No free ports left");
+    let builder = TestConfig::builder()
+        .followers(2_u16)
+        .base_port(port)
+        .generate("replication_dispatch_in_sequence");
+    let replica_test1 = builder.replica();
+    let (leader_gctx, leader_replica) = builder.leader_replica().await;
+    let spu_server = create_internal_server(builder.leader_addr(), leader_gctx.clone()).run();
+
+    let follower_gctx = builder.follower_ctx(0).await;
+    let mut replicas = vec![replica_test1.clone()];
+    follower_gctx
+        .replica_localstore()
+        .sync_all(replicas.clone().to_vec());
+    follower_gctx
+        .followers_state_owned()
+        .add_replica(&follower_gctx, replica_test1.clone())
+        .await
+        .expect("create");
+
+    sleep(Duration::from_millis(*MAX_WAIT_REPLICATION)).await;
+    let replica_test2 = builder.replica_inner("test2".to_owned());
+    replicas.push(replica_test2.clone());
+    follower_gctx
+        .replica_localstore()
+        .sync_all(replicas.clone().to_vec());
+    follower_gctx
+        .followers_state_owned()
+        .add_replica(&follower_gctx, replica_test2.clone())
+        .await
+        .expect("create");
+
+    leader_replica
+        .write_record_set(
+            &mut create_raw_recordset(2),
+            leader_gctx.follower_notifier(),
+        )
+        .await
+        .expect("write");
+
+    assert_eq!(leader_replica.leo(), 2);
+
+    sleep(Duration::from_millis(*MAX_WAIT_REPLICATION)).await;
+    let actions = leader_gctx
+        .apply_replica_update(UpdateReplicaRequest::with_all(1, replicas.clone()))
+        .await;
+    assert!(actions.is_empty());
+
+    let (leader_gctx2, leader_replica2) = builder.leader_replica_inner(replica_test2.clone()).await;
+
+    sleep(Duration::from_secs(REJECT_WAIT)).await;
+
+    leader_replica2
+        .write_record_set(
+            &mut create_raw_recordset(2),
+            leader_gctx2.follower_notifier(),
+        )
+        .await
+        .expect("write");
+    leader_replica
+        .write_record_set(
+            &mut create_raw_recordset(2),
+            leader_gctx.follower_notifier(),
+        )
+        .await
+        .expect("write");
+
+    sleep(Duration::from_millis(WAIT_TERMINATE)).await;
+
+    assert_eq!(leader_replica.leo(), 4);
+    assert_eq!(leader_replica2.leo(), 2);
+
+    sleep(Duration::from_millis(WAIT_TERMINATE)).await;
+
+    spu_server.notify();
+}
+
+#[fluvio_future::test(ignore)]
+async fn test_sync_larger_records() {
+    let num_records_total = 100;
+    let num_records_per_batch = 10;
+    let num_batches = 10;
+    let port = portpicker::pick_unused_port().expect("No free ports left");
+    let builder = TestConfig::builder()
+        .followers(1_u16)
+        .base_port(port)
+        .generate("sync_larger_records");
+
+    let leader_gctx = builder.leader_ctx().await;
+
+    let spu_server = create_internal_server(builder.leader_addr(), leader_gctx.clone()).run();
+
+    let replica = builder.replica();
+
+    let actions = leader_gctx
+        .apply_replica_update(UpdateReplicaRequest::with_all(1, vec![replica.clone()]))
+        .await;
+    assert!(actions.is_empty());
+
+    // give leader controller time to startup
+    sleep(Duration::from_millis(MAX_WAIT_LEADER)).await;
+
+    let leader = leader_gctx
+        .leaders_state()
+        .get(&replica.id)
+        .await
+        .expect("replica");
+    assert!(
+        leader_gctx
+            .followers_state()
+            .get(&replica.id)
+            .await
+            .is_none()
+    );
+    // should be new
+    assert_eq!(leader.leo(), 0);
+    assert_eq!(leader.hw(), 0);
+
+    // create a raw record with 512kb
+    let mut rng = rand::thread_rng();
+    let records = Vec::from_iter(
+        (0..num_batches)
+            .map(|_| {
+                let mut record = vec![0; 512 * 1024];
+                rng.fill(&mut record[..]);
+                record
+            })
+            .collect::<Vec<Vec<u8>>>()
+            .into_iter(),
+    );
+
+    // write 10 batches with 10 records with 512kb, total of 5MB per batch and 50MB total
+    for record in &records {
+        leader
+            .write_record_set(
+                &mut create_raw_recordset_inner(num_records_per_batch, record),
+                leader_gctx.follower_notifier(),
+            )
+            .await
+            .expect("write");
+    }
+
+    assert_eq!(leader.leo(), num_records_total as i64);
+    assert_eq!(leader.hw(), 0);
+
+    let follower_gctx = builder.follower_ctx(0).await;
+    let actions = follower_gctx
+        .apply_replica_update(UpdateReplicaRequest::with_all(1, vec![replica.clone()]))
+        .await;
+    assert!(actions.is_empty());
+    let follower = follower_gctx
+        .followers_state()
+        .get(&replica.id)
+        .await
+        .expect("follower");
+    assert_eq!(follower.leader(), LEADER);
+    assert_eq!(follower.leo(), 0);
+    assert_eq!(follower.hw(), 0);
+
+    // wait until follower sync up with leader
+    sleep(Duration::from_millis(*MAX_WAIT_REPLICATION)).await;
+    assert_eq!(follower.leo(), num_records_total as i64);
+
+    // hw has been replicated
+    assert_eq!(follower.hw(), num_records_total as i64);
+    assert_eq!(leader.hw(), num_records_total as i64);
+
+    // check if the records are the same
+    let leader_replica = leader
+        .read_records(0, num_records_total as u32, Isolation::ReadCommitted)
+        .await
+        .expect("read leader records");
+    let follower_replica = follower
+        .read_records(0, num_records_total as u32, Isolation::ReadCommitted)
+        .await
+        .expect("read follower records");
+
+    assert_eq!(leader_replica.start, follower_replica.start);
+    assert_eq!(leader_replica.end, follower_replica.end);
+    let leader_slice = leader_replica.file_slice.expect("slice");
+    let follower_slice = follower_replica.file_slice.expect("slice");
+
+    assert_eq!(leader_slice.len(), num_records_total as u64);
+    assert_eq!(follower_slice.len(), num_records_total as u64);
+
+    follower_gctx
+        .replica_localstore()
+        .sync_all(vec![replica.clone()]);
+
+    let mut batch_leader = FileBatchIterator::from_raw_slice(leader_slice);
+    let mut batch_follower = FileBatchIterator::from_raw_slice(follower_slice);
+
+    let mut leader_batches = vec![];
+    let mut follower_batches = vec![];
+    while let Some(Ok(record)) = batch_leader.next() {
+        leader_batches.push(record);
+    }
+    while let Some(Ok(record)) = batch_follower.next() {
+        follower_batches.push(record);
+    }
+    assert_eq!(leader_batches.len(), 1);
+    assert_eq!(follower_batches.len(), 1);
+
+    assert_eq!(
+        leader_batches[0].batch.base_offset,
+        follower_batches[0].batch.base_offset
+    );
+    assert_eq!(
+        leader_batches[0].batch.batch_len,
+        follower_batches[0].batch.batch_len
+    );
+
+    assert_eq!(leader_batches[0].records, follower_batches[0].records);
+    for (record_leader, record_follower) in leader_batches[0]
+        .records
+        .iter()
+        .zip(follower_batches[0].records.iter())
+    {
+        assert_eq!(record_leader, record_follower);
+    }
+
+    sleep(Duration::from_millis(WAIT_TERMINATE)).await;
+
+    spu_server.notify();
 }

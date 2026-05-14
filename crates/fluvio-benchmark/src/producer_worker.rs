@@ -1,103 +1,126 @@
-use std::time::Instant;
+use std::sync::Arc;
 
-use async_channel::Sender;
 use anyhow::Result;
 
-use fluvio::{TopicProducerPool, Fluvio, RecordKey, TopicProducerConfigBuilder};
+use async_channel::Sender;
+use fluvio::{
+    dataplane::record::RecordData, DeliverySemantic, Fluvio, Isolation,
+    ProduceCompletionBatchEvent, ProducerCallback, SharedProducerCallback, RecordKey,
+    TopicProducerConfigBuilder, TopicProducerPool,
+};
+use futures_util::future::BoxFuture;
+use tracing::debug;
 
 use crate::{
-    benchmark_config::{
-        BenchmarkConfig,
-        benchmark_matrix::{RecordKeyAllocationStrategy, SHARED_KEY},
-    },
-    BenchmarkRecord, generate_random_string, BenchmarkError,
-    stats_collector::StatsCollectorMessage,
+    config::{ProducerConfig, RecordKeyAllocationStrategy},
+    utils,
 };
 
-pub struct ProducerWorker {
+const SHARED_KEY: &str = "shared_key";
+
+// Example implementation of the ProducerCallback trait
+#[derive(Debug)]
+struct BenchmarkProducerCallback {
+    event_sender: Sender<ProduceCompletionBatchEvent>,
+}
+
+impl BenchmarkProducerCallback {
+    pub fn new(event_sender: Sender<ProduceCompletionBatchEvent>) -> Self {
+        Self { event_sender }
+    }
+}
+
+impl ProducerCallback for BenchmarkProducerCallback {
+    fn finished(&self, event: ProduceCompletionBatchEvent) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async {
+            self.event_sender.send(event).await?;
+            Ok(())
+        })
+    }
+}
+
+pub(crate) struct ProducerWorker {
     fluvio_producer: TopicProducerPool,
-    records_to_send: Option<Vec<BenchmarkRecord>>,
-    config: BenchmarkConfig,
-    producer_id: u64,
-    tx_to_stats_collector: Sender<StatsCollectorMessage>,
+    records_to_send: Vec<BenchmarkRecord>,
 }
 impl ProducerWorker {
-    pub async fn new(
-        producer_id: u64,
-        config: BenchmarkConfig,
-        tx_to_stats_collector: Sender<StatsCollectorMessage>,
+    pub(crate) async fn new(
+        id: u64,
+        config: ProducerConfig,
+        event_sender: Sender<ProduceCompletionBatchEvent>,
     ) -> Result<Self> {
         let fluvio = Fluvio::connect().await?;
+        let callback: SharedProducerCallback =
+            Arc::new(BenchmarkProducerCallback::new(event_sender));
 
         let fluvio_config = TopicProducerConfigBuilder::default()
-            .batch_size(config.producer_batch_size as usize)
-            .batch_queue_size(config.producer_queue_size as usize)
-            .linger(config.producer_linger)
-            // todo allow alternate partitioner
-            .compression(config.producer_compression)
-            .timeout(config.producer_server_timeout)
-            .isolation(config.producer_isolation)
-            .delivery_semantic(config.producer_delivery_semantic)
-            .build()
-            .map_err(|e| {
-                BenchmarkError::ErrorWithExplanation(format!("Fluvio topic config error: {e:?}"))
-            })?;
+            .callback(callback)
+            .batch_size(config.batch_size.as_u64() as usize)
+            .batch_queue_size(config.queue_size as usize)
+            .max_request_size(config.max_request_size.as_u64() as usize)
+            .linger(config.linger)
+            .compression(config.compression)
+            .timeout(config.server_timeout)
+            .isolation(Isolation::ReadUncommitted)
+            .delivery_semantic(DeliverySemantic::default())
+            .build()?;
+
         let fluvio_producer = fluvio
             .topic_producer_with_config(config.topic_name.clone(), fluvio_config)
             .await?;
+
+        let num_records = utils::records_per_producer(id, config.num_producers, config.num_records);
+
+        let records_to_send = create_records(config.clone(), num_records, id);
+
         Ok(ProducerWorker {
             fluvio_producer,
-            records_to_send: None,
-            config,
-            producer_id,
-            tx_to_stats_collector,
+            records_to_send,
         })
     }
-    pub async fn prepare_for_batch(&mut self) {
-        let records = (0..self.config.num_records_per_producer_worker_per_batch)
-            .map(|i| {
-                let key = match self.config.record_key_allocation_strategy {
-                    RecordKeyAllocationStrategy::NoKey => RecordKey::NULL,
-                    RecordKeyAllocationStrategy::AllShareSameKey => RecordKey::from(SHARED_KEY),
-                    RecordKeyAllocationStrategy::ProducerWorkerUniqueKey => {
-                        RecordKey::from(format!("producer-{}", self.producer_id.clone()))
-                    }
-                    RecordKeyAllocationStrategy::RoundRobinKey(x) => {
-                        RecordKey::from(format!("rr-{}", i % x))
-                    }
-                    RecordKeyAllocationStrategy::RandomKey => {
-                        RecordKey::from(format!("random-{}", generate_random_string(10)))
-                    }
-                };
-                let data = generate_random_string(self.config.record_size as usize);
-                BenchmarkRecord::new(key, data)
-            })
-            .collect();
-        self.records_to_send = Some(records);
-    }
 
-    pub async fn send_batch(&mut self) -> Result<()> {
-        for record in self.records_to_send.take().ok_or_else(|| {
-            BenchmarkError::ErrorWithExplanation(
-                "prepare_for_batch() not called on PrdoucerWorker".to_string(),
-            )
-        })? {
-            self.tx_to_stats_collector
-                .send(StatsCollectorMessage::MessageSent {
-                    hash: record.hash,
-                    send_time: Instant::now(),
-                    num_bytes: record.data.len() as u64,
-                })
+    pub async fn send_batch(self) -> Result<()> {
+        debug!("producer is sending batch");
+
+        for record in self.records_to_send.into_iter() {
+            let _ = self
+                .fluvio_producer
+                .send(record.key, record.data.clone())
                 .await?;
-
-            self.fluvio_producer.send(record.key, record.data).await?;
         }
         self.fluvio_producer.flush().await?;
-        self.tx_to_stats_collector
-            .send(StatsCollectorMessage::ProducerFlushed {
-                flush_time: Instant::now(),
-            })
-            .await?;
+
         Ok(())
+    }
+}
+
+fn create_records(config: ProducerConfig, num_records: u64, id: u64) -> Vec<BenchmarkRecord> {
+    utils::generate_random_string_vec(num_records as usize, config.record_size.as_u64() as usize)
+        .into_iter()
+        .map(|data| {
+            let key = match config.record_key_allocation_strategy {
+                RecordKeyAllocationStrategy::NoKey => RecordKey::NULL,
+                RecordKeyAllocationStrategy::AllShareSameKey => RecordKey::from(SHARED_KEY),
+                RecordKeyAllocationStrategy::ProducerWorkerUniqueKey => {
+                    RecordKey::from(format!("producer-{}", id.clone()))
+                }
+                RecordKeyAllocationStrategy::RandomKey => {
+                    //TODO: this could be optimized
+                    RecordKey::from(format!("random-{}", utils::generate_random_string(10)))
+                }
+            };
+            BenchmarkRecord::new(key, data.into())
+        })
+        .collect()
+}
+
+pub struct BenchmarkRecord {
+    pub key: RecordKey,
+    pub data: RecordData,
+}
+
+impl BenchmarkRecord {
+    pub fn new(key: RecordKey, data: RecordData) -> Self {
+        Self { key, data }
     }
 }

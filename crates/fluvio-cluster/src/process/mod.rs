@@ -17,7 +17,7 @@ pub async fn kill_local_processes(pb: &ProgressRenderer) -> Result<()> {
     let kill_proc = |name: &str, command_args: Option<&[String]>| {
         sysinfo::set_open_files_limit(0);
         let mut sys = System::new();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All); // Only load what we need.
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true); // Only load what we need.
         for process in sys.processes_by_exact_name(name.as_ref()) {
             if let Some(cmd_args) = command_args {
                 let proc_cmds = process.cmd();
@@ -69,7 +69,7 @@ pub fn delete_fs<T: AsRef<Path>>(
                 Ok(_) => {
                     debug!("Removed {}: {}", tag, path_ref.display());
                     if let Some(pb) = pb {
-                        pb.println(format!("Removed {}", tag))
+                        pb.println(format!("Removed {tag}"))
                     }
                 }
                 Err(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {

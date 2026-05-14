@@ -1,18 +1,18 @@
 [package]
 name = "json-test-connector"
-version = "0.0.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
 description = "Connector that generates JSON test data"
-edition = "2021"
+version = "0.0.0"
 publish = false
-
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 
 [dependencies]
 async-trait = { workspace = true }
 futures = { version = "0.3", default-features = false }
 anyhow = { workspace = true }
-async-std = { features = ["attributes", "tokio1"], workspace = true }
 tokio = { default-features = false, features = ["time"], workspace = true }
 serde = { default-features = false, features = ["derive"], workspace = true }
 

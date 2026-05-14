@@ -1,13 +1,13 @@
 [package]
 name = "fluvio-test"
-version = "0.0.0"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
-edition = "2021"
-autotests = false
 description = "Fluvio Test Utility"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
+autotests = false
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
@@ -32,6 +32,7 @@ fork = "0.2"
 sysinfo = { workspace = true }
 signal-hook = "0.3.13"
 indicatif = { workspace = true }
+humantime = { workspace = true }
 
 tracing = { workspace = true }
 
@@ -46,13 +47,13 @@ fluvio-future = { workspace = true, features = [
     "fixture",
 ] }
 fluvio-command = { version = "0.2.0" }
-fluvio-cli = { path = "../fluvio-cli" }
+fluvio-cli = { workspace = true }
 fluvio-controlplane-metadata = { workspace = true, features = ["k8"] }
 
 # Fluvio test framework Attribute macro
-fluvio-test-derive = { path = "../fluvio-test-derive" }
-fluvio-test-util = { path = "../fluvio-test-util" }
+fluvio-test-derive = { workspace = true }
+fluvio-test-util = { workspace = true }
 fluvio-protocol = { workspace = true, features = ["api"] }
 
 # Fluvio test framework Options derive
-fluvio-test-case-derive = { path = "../fluvio-test-case-derive" }
+fluvio-test-case-derive = { workspace = true }

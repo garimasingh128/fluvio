@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context};
 use cargo_metadata::{CargoOpt, MetadataCommand, Package};
 
+use crate::WASM_TARGET;
+
 #[derive(Debug)]
 pub struct PackageOption {
     pub release: String,
@@ -45,14 +47,14 @@ impl PackageInfo {
 
         let package = if let Some(root_package) = metadata.root_package() {
             // we found a root project already, if the user is expecting something else raise an error
-            if let Some(package_name) = &options.package_name {
-                if package_name != &root_package.name {
-                    return Err(anyhow!(
-                        "Current package name ({}) does not match the supplied package name ({}).",
-                        root_package.name,
-                        package_name
-                    ));
-                }
+            if let Some(package_name) = &options.package_name
+                && package_name != &root_package.name
+            {
+                return Err(anyhow!(
+                    "Current package name ({}) does not match the supplied package name ({}).",
+                    root_package.name,
+                    package_name
+                ));
             }
             root_package
         } else if let Some(package_name) = &options.package_name {
@@ -66,7 +68,10 @@ impl PackageInfo {
                 )
             })?
         } else {
-            return Err(anyhow!("Could not find a default cargo package in {}. Try the `-p` option to specify a project/package.", current_project.display()));
+            return Err(anyhow!(
+                "Could not find a default cargo package in {}. Try the `-p` option to specify a project/package.",
+                current_project.display()
+            ));
         };
 
         // find the path of the parent folder for this Cargo.toml
@@ -121,10 +126,10 @@ impl PackageInfo {
         Ok(path)
     }
 
-    /// path to package's wasm32-wasi target
+    /// path to package's wasm32-wasip1 target
     pub fn target_wasm32_wasi_path(&self) -> anyhow::Result<PathBuf> {
         let mut path = self.target_dir.clone();
-        path.push("wasm32-wasi");
+        path.push(WASM_TARGET);
         path.push(&self.profile);
         path.push(self.target_name()?.replace('-', "_"));
         path.set_extension("wasm");
@@ -159,6 +164,7 @@ pub fn get_current_project_path() -> anyhow::Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WASM_TARGET;
 
     #[test]
     fn test_package_info() {
@@ -174,21 +180,29 @@ mod tests {
 
         //then
         assert_eq!(package_info.package_name(), "cargo-builder");
-        assert!(package_info
-            .package_path()
-            .ends_with("crates/cargo-builder"));
+        assert!(
+            package_info
+                .package_path()
+                .ends_with("crates/cargo-builder")
+        );
         assert_eq!(package_info.target_name().unwrap(), "cargo_builder");
-        assert!(package_info
-            .target_bin_path()
-            .unwrap()
-            .ends_with("x86_64-unknown-linux-gnu/release-lto/cargo_builder"));
-        assert!(package_info
-            .target_wasm32_path()
-            .unwrap()
-            .ends_with("wasm32-unknown-unknown/release-lto/cargo_builder.wasm"));
-        assert!(package_info
-            .target_wasm32_wasi_path()
-            .unwrap()
-            .ends_with("wasm32-wasi/release-lto/cargo_builder.wasm"));
+        assert!(
+            package_info
+                .target_bin_path()
+                .unwrap()
+                .ends_with("x86_64-unknown-linux-gnu/release-lto/cargo_builder")
+        );
+        assert!(
+            package_info
+                .target_wasm32_path()
+                .unwrap()
+                .ends_with("wasm32-unknown-unknown/release-lto/cargo_builder.wasm")
+        );
+        assert!(
+            package_info
+                .target_wasm32_wasi_path()
+                .unwrap()
+                .ends_with(format!("{WASM_TARGET}/release-lto/cargo_builder.wasm"))
+        );
     }
 }

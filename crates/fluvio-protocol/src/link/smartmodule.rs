@@ -71,9 +71,10 @@ fn display_record_data(record: &RecordData) -> String {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Encoder, Decoder)]
+#[derive(Debug, Clone, Eq, PartialEq, Encoder, Decoder, Default)]
 pub enum SmartModuleKind {
     #[fluvio(tag = 0)]
+    #[default]
     Filter,
     #[fluvio(tag = 1)]
     Map,
@@ -87,12 +88,6 @@ pub enum SmartModuleKind {
     Join,
     #[fluvio(min_version = 17, tag = 6)]
     Generic,
-}
-
-impl Default for SmartModuleKind {
-    fn default() -> Self {
-        Self::Filter
-    }
 }
 
 impl fmt::Display for SmartModuleKind {
@@ -111,7 +106,9 @@ pub enum LegacySmartModuleError {
     #[error("WASM Module error: {0}")]
     #[fluvio(tag = 1)]
     InvalidWasmModule(String),
-    #[error("WASM module is not a valid '{0}' DerivedStream. Are you missing a #[smartmodule({0})] attribute?")]
+    #[error(
+        "WASM module is not a valid '{0}' DerivedStream. Are you missing a #[smartmodule({0})] attribute?"
+    )]
     #[fluvio(tag = 2)]
     InvalidDerivedStreamModule(String),
 }

@@ -24,7 +24,7 @@ impl ResumeOpt {
             Err(_) => {
                 return Err(
                     ClusterCliError::Other("Failed to create progress bar".to_string()).into(),
-                )
+                );
             }
         };
         let (installation_type, _config) = get_installation_type()?;
@@ -45,7 +45,7 @@ impl ResumeOpt {
         };
 
         if let Some(err) = resume_result.err() {
-            pb.println(format!("❌ Resume failed with {:#}", err));
+            pb.println(format!("❌ Resume failed with {err:#}"));
         }
 
         Ok(())
@@ -70,7 +70,7 @@ impl LocalResume {
                 return Err(ClusterCliError::Other(
                     "Configuration file for local cluster not found from previous run".to_string(),
                 )
-                .into())
+                .into());
             }
             Some(local_config_path) => LocalConfig::load_from(local_config_path),
         }

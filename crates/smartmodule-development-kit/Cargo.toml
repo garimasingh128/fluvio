@@ -1,12 +1,12 @@
 [package]
 name = "smartmodule-development-kit"
-version = "0.0.0"
-edition = "2021"
-authors = ["Fluvio Contributors <team@fluvio.io>"]
 description = "SmartModule Development Kit"
-repository = "https://github.com/infinyon/fluvio"
-license = "Apache-2.0"
+version = "0.0.0"
 publish = false
+repository.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [[bin]]
 name = "smdk"
@@ -23,14 +23,14 @@ toml = { workspace = true }
 cargo-generate = { workspace = true }
 include_dir = { workspace = true }
 tempfile = { workspace = true }
-lib-cargo-crate = "0.2.1"
+lib-cargo-crate = { workspace = true }
+openssl = { workspace = true, features = ["vendored"] } # cargo-generate requires openssl
 
 
-fluvio = { path = "../fluvio", default-features = false }
-fluvio-hub-util = { path = "../fluvio-hub-util" }
+fluvio = { workspace = true }
 fluvio-future = { workspace = true, features = ["subscriber"]}
-fluvio-smartengine = { path = "../fluvio-smartengine", features = ["transformation"] }
-fluvio-extension-common = { path = "../fluvio-extension-common", features = ["target"] }
-fluvio-controlplane-metadata = { path = "../fluvio-controlplane-metadata", features = ["smartmodule"] }
-fluvio-cli-common = { path = "../fluvio-cli-common", features = ["file-records", "version-cmd", "serde", "smartmodule-test"] }
+fluvio-smartengine = { workspace = true, features = ["transformation"] }
+fluvio-extension-common = { workspace = true, features = ["target"] }
+fluvio-controlplane-metadata = { workspace = true, features = ["smartmodule"] }
+fluvio-cli-common = { workspace = true, features = ["file-records", "version-cmd", "serde", "smartmodule-test"] }
 cargo-builder = { path = "../cargo-builder"}

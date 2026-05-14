@@ -13,7 +13,9 @@ use fluvio_storage::ReplicaStorage;
 
 use crate::config::SpuConfig;
 use crate::control_plane::SharedMirrorStatusUpdate;
+use crate::control_plane::SharedPartitionStatusUpdate;
 use crate::control_plane::StatusMirrorMessageSink;
+use crate::control_plane::StatusPartitionMessageSink;
 use crate::kv::consumer::SharedConsumerOffsetStorages;
 use crate::replication::follower::FollowersState;
 use crate::replication::follower::SharedFollowersState;
@@ -48,6 +50,7 @@ pub struct GlobalContext<S> {
     spu_followers: SharedSpuUpdates,
     lrs_status_update: SharedLrsStatusUpdate,
     mirror_status_update: SharedMirrorStatusUpdate,
+    partition_status_update: SharedPartitionStatusUpdate,
     sm_engine: SmartEngine,
     leaders: Arc<LeaderConnections>,
     mirrors: SharedMirrorLocalStore,
@@ -82,6 +85,7 @@ where
             spu_followers: FollowerNotifier::shared(),
             lrs_status_update: StatusLrsMessageSink::shared(),
             mirror_status_update: StatusMirrorMessageSink::shared(),
+            partition_status_update: StatusPartitionMessageSink::shared(),
             sm_engine: SmartEngine::new(),
             leaders: LeaderConnections::shared(spus, replicas),
             mirrors: MirrorLocalStore::new_shared(),
@@ -143,6 +147,10 @@ where
         &self.spu_followers
     }
 
+    pub fn follower_notifier_owned(&self) -> Arc<FollowerNotifier> {
+        self.spu_followers.clone()
+    }
+
     #[allow(unused)]
     pub fn status_update(&self) -> &StatusLrsMessageSink {
         &self.lrs_status_update
@@ -159,6 +167,10 @@ where
 
     pub fn mirror_status_update_owned(&self) -> SharedMirrorStatusUpdate {
         self.mirror_status_update.clone()
+    }
+
+    pub fn partition_status_update_owned(&self) -> SharedPartitionStatusUpdate {
+        self.partition_status_update.clone()
     }
 
     /// notify all follower handlers with SPU changes
@@ -292,9 +304,7 @@ mod file_replica {
                 match replica_action {
                     SpecChange::Add(new_replica) => {
                         if new_replica.is_being_deleted {
-                            outputs.push(ReplicaChange::Remove(
-                                self.remove_leader_replica(new_replica).await,
-                            ));
+                            self.remove_replica(&mut outputs, new_replica).await;
                         } else if new_replica.leader == local_id {
                             // we are leader
                             if let Err(err) = self
@@ -324,23 +334,11 @@ mod file_replica {
                         }
                     }
                     SpecChange::Delete(deleted_replica) => {
-                        if deleted_replica.leader == local_id {
-                            outputs.push(ReplicaChange::Remove(
-                                self.remove_leader_replica(deleted_replica).await,
-                            ));
-                        } else {
-                            self.remove_follower_replica(deleted_replica).await;
-                        }
+                        self.remove_replica(&mut outputs, deleted_replica).await;
                     }
                     SpecChange::Mod(new_replica, old_replica) => {
                         if new_replica.is_being_deleted {
-                            if new_replica.leader == local_id {
-                                outputs.push(ReplicaChange::Remove(
-                                    self.remove_leader_replica(new_replica).await,
-                                ));
-                            } else {
-                                self.remove_follower_replica(new_replica).await
-                            }
+                            self.remove_replica(&mut outputs, new_replica).await;
                         } else {
                             // check for leader change
                             if new_replica.leader != old_replica.leader {
@@ -378,7 +376,21 @@ mod file_replica {
             outputs
         }
 
-        /// reemove leader replica
+        async fn remove_replica(&self, outputs: &mut Vec<ReplicaChange>, replica: Replica) {
+            if replica.leader == self.local_spu_id() {
+                outputs.push(ReplicaChange::Remove(
+                    self.remove_leader_replica(replica.clone()).await,
+                ));
+            } else {
+                self.remove_follower_replica(replica.clone()).await;
+            }
+
+            if let Err(err) = self.delete_consumers_offset(&replica).await {
+                error!("error: {} deleting consumers offset: {}", err, replica);
+            }
+        }
+
+        /// remove leader replica
         #[instrument(
             skip(self,replica),
             fields(
@@ -389,6 +401,7 @@ mod file_replica {
             // try to send message to leader controller if still exists
             if let Some(previous_state) = self.leaders_state().remove(&replica.id).await {
                 previous_state.signal_topic_deleted().await;
+
                 if let Err(err) = previous_state.remove().await {
                     error!("error: {} removing replica: {}", err, replica);
                 } else {
@@ -405,7 +418,7 @@ mod file_replica {
             ReplicaRemovedRequest::new(replica.id, true)
         }
 
-        /// reemove leader replica
+        /// remove leader replica
         #[instrument(
             skip(self,replica),
             fields(
@@ -473,6 +486,26 @@ mod file_replica {
             if let Err(err) = self.followers_state_owned().add_replica(self, new).await {
                 error!("leader switch failed: {}", err);
             }
+        }
+
+        /// Delete consumers offset for given replica if it is leader consumer
+        async fn delete_consumers_offset(&self, replica: &Replica) -> anyhow::Result<()> {
+            let Some(ref replica_consumer) = self.leaders_state().is_consumer_offset_leader().await
+            else {
+                debug!("cannot delete consumer offset, no leader found");
+                return Ok(());
+            };
+
+            let consumer_storage = self
+                .consumer_offset()
+                .get_or_insert(replica_consumer, self.follower_notifier())
+                .await?;
+
+            consumer_storage.delete_by_replica_key(&replica.id).await?;
+
+            debug!(?replica, "consumer offset deleted");
+
+            Ok(())
         }
     }
 }

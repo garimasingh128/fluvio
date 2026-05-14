@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 use tracing::{debug, error, instrument, warn};
 use once_cell::sync::Lazy;
 
-use fluvio::{Fluvio, FluvioConfig};
+use fluvio::{Fluvio, FluvioClusterConfig};
 use fluvio::config::{TlsPolicy, ConfigFile, LOCAL_PROFILE};
 use fluvio_controlplane_metadata::spu::{SpuSpec, CustomSpuSpec};
 use fluvio_future::timer::sleep;
@@ -384,7 +384,6 @@ impl LocalInstaller {
     /// # Ok(())
     /// # }
     /// ```
-
     pub fn from_config(config: LocalConfig) -> Self {
         Self {
             pb_factory: ProgressBarFactory::new(config.hide_spinner),
@@ -524,7 +523,7 @@ impl LocalInstaller {
             .config
             .sc_pub_addr
             .split(':')
-            .last()
+            .next_back()
             .unwrap_or(LOCAL_SC_PORT)
             .parse()?;
 
@@ -560,7 +559,7 @@ impl LocalInstaller {
                 return Err(LocalInstallError::Other(format!(
                     "Installation type {other} is not supported for local clusters"
                 ))
-                .into())
+                .into());
             }
         };
 
@@ -580,8 +579,8 @@ impl LocalInstaller {
         sleep(Duration::from_secs(2)).await;
 
         // construct config to connect to SC
-        let cluster_config =
-            FluvioConfig::new(public_address).with_tls(self.config.client_tls_policy.clone());
+        let cluster_config = FluvioClusterConfig::new(public_address)
+            .with_tls(self.config.client_tls_policy.clone());
 
         try_connect_to_sc(&cluster_config, &self.config.platform_version, pb)
             .await

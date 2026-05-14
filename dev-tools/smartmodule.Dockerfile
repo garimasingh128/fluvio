@@ -43,12 +43,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN source "$HOME/.cargo/env"
 
 # setup fluvio
-RUN curl -fsS https://hub.infinyon.cloud/install/install.sh?ctx=ci | bash
+RUN curl -fsS https://raw.githubusercontent.com/fluvio-community/fluvio/master/install.sh | bash
 
 # add Fluvio smartmodule deps
 # source cargo/env is a little bit of a workaround
 RUN source "$HOME/.cargo/env" && rustup target install wasm32-unknown-unknown
-RUN source "$HOME/.cargo/env" && rustup target install wasm32-wasi
+RUN source "$HOME/.cargo/env" && rustup target install wasm32-wasip1
 RUN source "$HOME/.cargo/env" && cargo install cargo-generate
 
 # create example-sm dir with a template project in it

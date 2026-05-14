@@ -16,7 +16,8 @@
         "compressionType": "Any",
         "replicas": {
             "mirror": {
-                "home": [
+                "home": {
+		    "partitions": [
                     {
                         "remoteCluster": "boat1",
                         "remoteReplica": "boats-0"
@@ -24,8 +25,9 @@
                     {
                         "remoteCluster": "boat2",
                         "remoteReplica": "boats-0"
-                    }
-                ]
+                    }],
+	   	    "source": false
+		}
             }
         }
     }
